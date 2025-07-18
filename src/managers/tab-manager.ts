@@ -170,15 +170,16 @@ export class TabManager {
 
     await storageManager.saveTrackingState(windowManager.getAllTrackers());
 
-    // Handle tab selection after close
-    if (tabcount - 1 > 1 && tabloc === tabcount - 1) {
-      if (settings.flip) {
-        const nextTabId = tabarr[tabarr.length - 1];
-        logger.debug(`CloseTab: Tab flipping ON - selecting last tab: ${nextTabId}`);
-        this.setFocus(nextTabId, "CloseTab");
-      } else {
-        logger.debug(`CloseTab: Tab flipping OFF - letting Chrome handle selection`);
-      }
+    // Handle tab selection after close - only if there are remaining tabs and flip is enabled
+    if (tabarr.length > 0 && settings.flip) {
+      // Always select the last tab in the MRU order (most recently used)
+      const nextTabId = tabarr[tabarr.length - 1];
+      logger.debug(`CloseTab: Tab flipping ON - selecting last tab: ${nextTabId}`);
+      this.setFocus(nextTabId, "CloseTab");
+    } else {
+      logger.debug(
+        `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`
+      );
     }
   }
 
