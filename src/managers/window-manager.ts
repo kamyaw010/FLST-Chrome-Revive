@@ -21,15 +21,30 @@ export class WindowManager {
    * Initialize window tracking from current browser state
    */
   public async initializeTracking(): Promise<void> {
+    logger.debug("Initializing window tracking...");
+
+    // Try to restore from storage first
+    const restoredState = await this.restoreTrackingState();
+
     return new Promise((resolve, reject) => {
-      chrome.windows.getAll({ populate: true }, (windows: any[]) => {
+      chrome.windows.getAll({ populate: true }, async (windows: any[]) => {
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
           return;
         }
 
         try {
-          this.setTracking(windows);
+          if (restoredState && this.validateRestoredState(windows, restoredState)) {
+            logger.debug("Successfully restored tracking state from storage");
+            this.trackers = restoredState;
+          } else {
+            logger.debug("Building fresh tracking state from current browser state");
+            this.setTracking(windows);
+          }
+
+          // Always save current state after initialization
+          await storageManager.saveTrackingState(this.trackers);
+
           logger.debug(`Window tracking initialized: ${this.trackers.length} windows`);
           resolve();
         } catch (error) {
@@ -39,6 +54,57 @@ export class WindowManager {
     });
   }
 
+  /**
+   * Restore tracking state from storage
+   */
+  private async restoreTrackingState(): Promise<TabTracker[] | null> {
+    try {
+      const restored = await storageManager.loadTrackingState();
+      return restored.length > 0 ? restored : null;
+    } catch (error) {
+      logger.error("Failed to restore tracking state", error);
+      return null;
+    }
+  }
+
+  /**
+   * Validate that restored state matches current browser state
+   */
+  private validateRestoredState(currentWindows: any[], restoredState: TabTracker[]): boolean {
+    // Check if the number of windows matches
+    if (currentWindows.length !== restoredState.length) {
+      logger.debug("Window count mismatch, rebuilding state");
+      return false;
+    }
+
+    // Check if each window still exists and has matching tabs
+    for (const tracker of restoredState) {
+      const currentWindow = currentWindows.find((w) => w.id === tracker.wid);
+      if (!currentWindow) {
+        logger.debug(`Window ${tracker.wid} no longer exists`);
+        return false;
+      }
+
+      // Check if tabs still exist
+      const currentTabIds = currentWindow.tabs.map((t: any) => t.id).sort();
+      const trackedTabIds = tracker.tabarr.slice().sort();
+
+      if (currentTabIds.length !== trackedTabIds.length) {
+        logger.debug(`Tab count mismatch for window ${tracker.wid}`);
+        return false;
+      }
+
+      // Check if all tabs still exist
+      for (const tabId of trackedTabIds) {
+        if (!currentTabIds.includes(tabId)) {
+          logger.debug(`Tab ${tabId} no longer exists in window ${tracker.wid}`);
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
   /**
    * Set up tracking for multiple windows
    */
@@ -56,7 +122,7 @@ export class WindowManager {
   /**
    * Add a window to tracking
    */
-  public addWindow(windowObj: any): void {
+  public async addWindow(windowObj: any): Promise<void> {
     if (!windowObj || !windowObj.id) {
       logger.debug(`AddWindow: Invalid window object`);
       return;
@@ -71,6 +137,7 @@ export class WindowManager {
     if (!windowObj.tabs || !Array.isArray(windowObj.tabs)) {
       logger.debug(`AddWindow: Window ${windowObj.id} has no tabs or tabs is not an array`);
       this.trackers.push(tracker);
+      await storageManager.saveTrackingState(this.trackers);
       return;
     }
 
@@ -95,18 +162,18 @@ export class WindowManager {
     );
 
     // Save state after adding window
-    storageManager.saveTrackingState(this.trackers);
+    await storageManager.saveTrackingState(this.trackers);
   }
 
   /**
    * Remove a window from tracking
    */
-  public removeWindow(windowId: number): void {
+  public async removeWindow(windowId: number): Promise<void> {
     const index = this.trackers.findIndex((tracker) => tracker.wid === windowId);
     if (index !== -1) {
       this.trackers.splice(index, 1);
       logger.debug(`RemoveWindow: Window ${windowId} removed`);
-      storageManager.saveTrackingState(this.trackers);
+      await storageManager.saveTrackingState(this.trackers);
     }
   }
 
@@ -168,9 +235,9 @@ export class WindowManager {
   /**
    * Clear all tracking data
    */
-  public clearTracking(): void {
+  public async clearTracking(): Promise<void> {
     this.trackers = [];
-    storageManager.saveTrackingState(this.trackers);
+    await storageManager.clearTrackingState();
   }
 
   /**

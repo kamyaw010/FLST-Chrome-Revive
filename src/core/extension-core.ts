@@ -43,7 +43,6 @@ export class ExtensionCore {
 
       // Initialize service worker lifecycle
       serviceWorkerManager.initializeLifecycleHandlers();
-      serviceWorkerManager.startKeepAlive();
 
       this.isInitialized = true;
       logger.log("FLST Chrome extension fully initialized");
@@ -82,20 +81,20 @@ export class ExtensionCore {
    */
   private handleWindowCreated(window: any): void {
     // When a new window is created, it might not have tabs populated immediately
-    chrome.windows.get(window.id, { populate: true }, (populatedWindow: any) => {
+    chrome.windows.get(window.id, { populate: true }, async (populatedWindow: any) => {
       if (chrome.runtime.lastError) {
         logger.error(`Error getting window ${window.id}: ${chrome.runtime.lastError.message}`);
         return;
       }
-      windowManager.addWindow(populatedWindow);
+      await windowManager.addWindow(populatedWindow);
     });
   }
 
   /**
    * Handle window removal
    */
-  private handleWindowRemoved(windowId: number): void {
-    windowManager.removeWindow(windowId);
+  private async handleWindowRemoved(windowId: number): Promise<void> {
+    await windowManager.removeWindow(windowId);
   }
 
   /**
@@ -185,13 +184,13 @@ export class ExtensionCore {
    */
   public getStatus(): {
     initialized: boolean;
-    keepAliveActive: boolean;
+    serviceWorkerActive: boolean;
     trackingStats: any;
     settings: any;
   } {
     return {
       initialized: this.isInitialized,
-      keepAliveActive: serviceWorkerManager.isKeepAliveActive(),
+      serviceWorkerActive: serviceWorkerManager.isServiceWorkerActive(),
       trackingStats: windowManager.getTrackingStats(),
       settings: settingsManager.getSettings(),
     };
@@ -200,10 +199,9 @@ export class ExtensionCore {
   /**
    * Shutdown the extension gracefully
    */
-  public shutdown(): void {
+  public async shutdown(): Promise<void> {
     logger.log("Shutting down FLST Chrome extension...");
-    serviceWorkerManager.stopKeepAlive();
-    windowManager.clearTracking();
+    await windowManager.clearTracking();
     this.isInitialized = false;
     logger.log("Extension shutdown complete");
   }

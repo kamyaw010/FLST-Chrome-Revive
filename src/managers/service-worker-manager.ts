@@ -1,11 +1,11 @@
 // Service Worker Manager for FLST Chrome extension
 
 import { logger } from "../utils/logger.js";
+import { storageManager } from "./storage-manager.js";
 
 export class ServiceWorkerManager {
   private static instance: ServiceWorkerManager;
-  private keepAliveInterval: number | undefined;
-  private readonly KEEP_ALIVE_INTERVAL = 20000; // 20 seconds
+  private isActive: boolean = false;
 
   private constructor() {}
 
@@ -17,56 +17,58 @@ export class ServiceWorkerManager {
   }
 
   /**
-   * Start the keep-alive mechanism to prevent service worker suspension
-   */
-  public startKeepAlive(): void {
-    if (this.keepAliveInterval) {
-      this.stopKeepAlive();
-    }
-
-    this.keepAliveInterval = setInterval(() => {
-      chrome.runtime.getPlatformInfo(() => {
-        // This simple API call keeps the service worker alive
-        logger.debug("Service worker keep-alive ping");
-      });
-    }, this.KEEP_ALIVE_INTERVAL);
-
-    logger.debug("Keep-alive mechanism started");
-  }
-
-  /**
-   * Stop the keep-alive mechanism
-   */
-  public stopKeepAlive(): void {
-    if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
-      this.keepAliveInterval = undefined;
-      logger.debug("Keep-alive mechanism stopped");
-    }
-  }
-
-  /**
    * Initialize service worker lifecycle handlers
    */
   public initializeLifecycleHandlers(): void {
+    this.isActive = true;
+
+    // Handle service worker startup
+    chrome.runtime.onStartup.addListener(() => {
+      logger.debug("Service worker started");
+      this.isActive = true;
+    });
+
     // Handle service worker suspension
     chrome.runtime.onSuspend.addListener(() => {
-      logger.debug("Service worker suspending - cleaning up");
-      this.stopKeepAlive();
+      logger.debug("Service worker suspending - persisting state");
+      this.isActive = false;
+      // State will be saved automatically by the last operation
     });
 
     // Handle service worker suspend cancellation
     chrome.runtime.onSuspendCanceled.addListener(() => {
-      logger.debug("Service worker suspend canceled - restarting keep-alive");
-      this.startKeepAlive();
+      logger.debug("Service worker suspend canceled");
+      this.isActive = true;
+    });
+
+    // Handle extension installation/update
+    chrome.runtime.onInstalled.addListener(async (details) => {
+      logger.debug(`Extension ${details.reason}`);
+
+      // Clear old state on fresh install
+      if (details.reason === "install") {
+        await storageManager.clearTrackingState();
+      }
+
+      this.isActive = true;
     });
   }
 
   /**
-   * Check if keep-alive is active
+   * Check if service worker is active
    */
-  public isKeepAliveActive(): boolean {
-    return this.keepAliveInterval !== undefined;
+  public isServiceWorkerActive(): boolean {
+    return this.isActive;
+  }
+
+  /**
+   * Get service worker status
+   */
+  public getStatus(): { active: boolean; timestamp: number } {
+    return {
+      active: this.isActive,
+      timestamp: Date.now(),
+    };
   }
 }
 

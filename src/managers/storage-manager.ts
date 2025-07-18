@@ -1,7 +1,7 @@
 // Storage Manager for FLST Chrome extension
 
 import { logger } from "../utils/logger.js";
-import type { StorageData, TabTracker } from "../types.js";
+import type { StorageData, TabTracker, StoredTrackingState } from "../types.js";
 
 export class StorageManager {
   private static instance: StorageManager;
@@ -89,11 +89,17 @@ export class StorageManager {
   }
 
   /**
-   * Save tracking state to storage
+   * Save tracking state to storage with timestamp
    */
   public async saveTrackingState(trackingState: TabTracker[]): Promise<void> {
     try {
-      await this.setSetting("trackingState", trackingState);
+      const stateData = {
+        trackingState,
+        timestamp: Date.now(),
+        version: "3.0.3",
+      };
+      await this.setSetting("flstState", stateData);
+      logger.debug(`Tracking state saved: ${trackingState.length} windows`);
     } catch (error) {
       logger.error("Error saving tracking state", error);
     }
@@ -104,11 +110,41 @@ export class StorageManager {
    */
   public async loadTrackingState(): Promise<TabTracker[]> {
     try {
-      const state = await this.getSetting("trackingState", []);
-      return Array.isArray(state) ? state : [];
+      const stateData = (await this.getSetting("flstState", null)) as StoredTrackingState | null;
+      if (!stateData || !stateData.trackingState || !Array.isArray(stateData.trackingState)) {
+        logger.debug("No valid tracking state found in storage");
+        return [];
+      }
+
+      const age = Date.now() - (stateData.timestamp || 0);
+      const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+
+      if (age > maxAge) {
+        logger.debug("Tracking state too old, ignoring");
+        return [];
+      }
+
+      logger.debug(
+        `Loaded tracking state: ${stateData.trackingState.length} windows, age: ${Math.round(
+          age / 1000
+        )}s`
+      );
+      return stateData.trackingState;
     } catch (error) {
       logger.error("Error loading tracking state", error);
       return [];
+    }
+  }
+
+  /**
+   * Clear tracking state from storage
+   */
+  public async clearTrackingState(): Promise<void> {
+    try {
+      await this.setSetting("flstState", null);
+      logger.debug("Tracking state cleared");
+    } catch (error) {
+      logger.error("Error clearing tracking state", error);
     }
   }
 }
