@@ -81,7 +81,7 @@ export class TabManager {
 
     const settings = settingsManager.getSettings();
     logger.debug(
-      `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}`
+      `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}`
     );
 
     // Handle tab relocation
@@ -89,9 +89,18 @@ export class TabManager {
       await this.relocateTabToFarRight(tabObj, logPrefix);
     }
 
-    // Add tab to tracking
+    // Handle new tab selection and tracking based on ntsel option
     if (tabObj.id) {
-      tracker.tabarr.push(tabObj.id);
+      if (settings.ntsel) {
+        // Select new tab and add to end of array (most recently used)
+        this.setFocus(tabObj.id, "NewTab");
+        tracker.tabarr.push(tabObj.id);
+        logger.debug(`${logPrefix}[select new tab]`);
+      } else {
+        // Chrome standard behavior - don't select, add to beginning
+        tracker.tabarr.unshift(tabObj.id);
+        logger.debug(`${logPrefix}[chrome standard - don't select]`);
+      }
       await storageManager.saveTrackingState(windowManager.getAllTrackers());
     }
 

@@ -5,15 +5,17 @@ import { storageManager } from "./storage-manager.js";
 import type { SettingUpdateMessage } from "../types.js";
 
 export interface FlstSettings {
-  flip: number; // Tab flipping: 1 = on (last selected), 0 = off (left tab)
+  flip: number;  // Tab flipping: 1 = on (last selected), 0 = off (left tab)
+  ntsel: number; // New tab selection: 1 = select new tab, 0 = chrome standard
   reloc: number; // New tab location: 1 = far right, 0 = chrome standard
-  log: boolean; // Enable/disable logging
+  log: boolean;  // Enable/disable logging
 }
 
 export class SettingsManager {
   private static instance: SettingsManager;
   private settings: FlstSettings = {
     flip: 1,
+    ntsel: 1,
     reloc: 1,
     log: false,
   };
@@ -33,6 +35,7 @@ export class SettingsManager {
   public async initialize(): Promise<void> {
     try {
       this.settings.flip = await storageManager.initializeSetting("flip", 1);
+      this.settings.ntsel = await storageManager.initializeSetting("ntsel", 1);
       this.settings.reloc = await storageManager.initializeSetting("reloc", 1);
       this.settings.log = await storageManager.initializeSetting("log", false);
 

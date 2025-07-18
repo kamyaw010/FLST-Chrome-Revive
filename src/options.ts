@@ -55,11 +55,12 @@ class OptionsManager {
       }
 
       // Get all settings at once
-      const settings = await chrome.storage.local.get(["flip", "reloc", "log"]);
+      const settings = await chrome.storage.local.get(["flip", "ntsel", "reloc", "log"]);
 
       // Set default values if undefined
       const defaults = {
         flip: 1,
+        ntsel: 1,
         reloc: 1,
         log: 0, // 0 = off, 1 = on
       };
@@ -85,7 +86,7 @@ class OptionsManager {
    */
   public async getCurrentSettings(): Promise<Record<string, any>> {
     try {
-      return await chrome.storage.local.get(["flip", "reloc", "log"]);
+      return await chrome.storage.local.get(["flip", "ntsel", "reloc", "log"]);
     } catch (error) {
       logger.error("Error getting current settings", error);
       return {};
@@ -99,6 +100,7 @@ class OptionsManager {
     try {
       const defaults = {
         flip: 1,
+        ntsel: 1,
         reloc: 1,
         log: 0,
       };

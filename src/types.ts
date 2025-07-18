@@ -10,6 +10,7 @@ export interface ExtensionState {
   log: boolean;
   logstrs: string[];
   flip: number;
+  ntsel: number;  // New tab selection: 1 = select new tab, 0 = chrome standard
   reloc: number;
   track: TabTracker[];
   skip?: string | null;
