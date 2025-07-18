@@ -1,0 +1,39 @@
+{
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_icon": {
+      "19": "img/flstr19.png",
+      "24": "img/flstr24.png",
+      "32": "img/flstr32.png",
+      "38": "img/flstr38.png"
+    },
+    "default_title": "FLST Chrome"
+  },
+  "commands": {
+    "_execute_action": {
+      "description": "Tab Flipping",
+      "suggested_key": {
+        "default": "Alt+N"
+      }
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self'"
+  },
+  "description": "Focus Last Selected Tab :: Provides natural / MRU tab ordering + Options for Tab Flipping, New Tab Select, and New Tab Location",
+  "icons": {
+    "128": "img/flstr128.png",
+    "19": "img/flstr19.png",
+    "24": "img/flstr24.png",
+    "32": "img/flstr32.png",
+    "48": "img/flstr48.png"
+  },
+  "manifest_version": 3,
+  "minimum_chrome_version": "88",
+  "name": "FLST Chrome Revive",
+  "options_page": "options.html",
+  "permissions": ["contextMenus", "storage", "tabs"],
+  "version": "3.0.3"
+}

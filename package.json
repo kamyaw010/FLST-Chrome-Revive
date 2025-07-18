@@ -1,0 +1,30 @@
+{
+  "name": "flst-chrome-revive",
+  "version": "3.0.3",
+  "description": "FLST Chrome Revive :: Focus Last Selected Tab - Provides natural / MRU tab ordering + Options for Tab Flipping, New Tab Select, and New Tab Location",
+  "scripts": {
+    "build": "tsc",
+    "build:dev": "pwsh -ExecutionPolicy Bypass -File build.ps1 -Mode development",
+    "build:prod": "pwsh -ExecutionPolicy Bypass -File build.ps1 -Mode production",
+    "build:watch": "pwsh -ExecutionPolicy Bypass -File build.ps1 -Mode development -Watch",
+    "build:clean": "pwsh -ExecutionPolicy Bypass -File build.ps1 -Clean",
+    "watch": "tsc --watch",
+    "clean": "rimraf dist build",
+    "dev": "npm run build:dev",
+    "prod": "npm run build:prod"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "typescript": "^5.4.5",
+    "rimraf": "^5.0.5"
+  },
+  "keywords": [
+    "chrome-extension",
+    "tabs",
+    "mru",
+    "focus",
+    "last-selected"
+  ],
+  "author": "FLST Chrome Revive",
+  "license": "MIT"
+}

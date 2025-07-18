@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>FLST Options</title>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:;" />
+    <link rel="shortcut icon" href="img/flstr19.png" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <img src="img/flstr48.png" alt="FLST Icon" />
+        <h1>FLST Options</h1>
+      </div>
+
+      <div class="option-group">
+        <h2>Tab Flipping</h2>
+        <div class="radio-group">
+          <div>
+            <input type="radio" name="flip" value="1" id="flip-on" checked />
+            <label class="radio-label" for="flip-on">On</label>
+          </div>
+          <div>
+            <input type="radio" name="flip" value="0" id="flip-off" />
+            <label class="radio-label" for="flip-off">Off</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="option-group">
+        <h2>New Tab Location</h2>
+        <div class="radio-group">
+          <div>
+            <input type="radio" name="reloc" value="1" id="reloc-on" checked />
+            <label class="radio-label" for="reloc-on">Far right</label>
+          </div>
+          <div>
+            <input type="radio" name="reloc" value="0" id="reloc-off" />
+            <label class="radio-label" for="reloc-off">Chrome standard</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="website">
+        <p>
+          Thank you for using FLST Chrome Revive! This extension is a continuation of the original FLST extension. For
+          more information and to support the original extension, please visit:
+        </p>
+        <a
+          href="https://chromewebstore.google.com/detail/flst-chrome/ajnianifcggmdojhnmjichjmnjpplcha?utm_source=ext_app_menu"
+          target="_blank"
+          >FLST Chrome on Web Store</a
+        >
+      </div>
+
+      <div class="version">Rev 3.0.3</div>
+    </div>
+    <script src="options.js"></script>
+    <script src="ksc.js"></script>
+  </body>
+</html>
