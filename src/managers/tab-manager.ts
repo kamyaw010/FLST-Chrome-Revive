@@ -3,7 +3,7 @@
 import { logger } from "../utils/logger.js";
 import { storageManager } from "./storage-manager.js";
 import { settingsManager } from "./settings-manager.js";
-import type { TabTracker, TabInfo, SafeTabMoveCallback } from "../types.js";
+import type { TabTracker, TabInfo, SafeTabMoveCallback, TabMRUEntry } from "../types.js";
 
 export class TabManager {
   private static instance: TabManager;
@@ -16,6 +16,69 @@ export class TabManager {
       TabManager.instance = new TabManager();
     }
     return TabManager.instance;
+  }
+
+  /**
+   * Add tab to MRU array with proper timestamp ordering
+   */
+  private addTabToMRU(
+    tabarr: TabMRUEntry[],
+    tabId: number,
+    position: "first" | "last" = "last"
+  ): void {
+    const order = Date.now();
+    const entry: TabMRUEntry = { tabId, order };
+
+    if (position === "first") {
+      tabarr.unshift(entry);
+    } else {
+      tabarr.push(entry);
+    }
+  }
+
+  /**
+   * Remove tab from MRU array
+   */
+  private removeTabFromMRU(tabarr: TabMRUEntry[], tabId: number): number {
+    const index = tabarr.findIndex((entry) => entry.tabId === tabId);
+    if (index !== -1) {
+      tabarr.splice(index, 1);
+    }
+    return index;
+  }
+
+  /**
+   * Update tab timestamp in MRU array (when tab is activated)
+   */
+  private updateTabTimestamp(tabarr: TabMRUEntry[], tabId: number): void {
+    const entry = tabarr.find((entry) => entry.tabId === tabId);
+    if (entry) {
+      entry.order = Date.now();
+      logger.debug(`Updated timestamp for tab ${tabId} to ${entry.order}`);
+    }
+  }
+
+  /**
+   * Get most recently used tab ID (highest timestamp)
+   */
+  private getMostRecentTabId(tabarr: TabMRUEntry[]): number | null {
+    if (tabarr.length === 0) return null;
+
+    // Sort by timestamp to get the most recent (highest timestamp)
+    const sorted = [...tabarr].sort((a, b) => b.order - a.order);
+    return sorted[0].tabId;
+  }
+
+  /**
+   * Find tab in MRU array and return info
+   */
+  private findTabInMRU(
+    tabarr: TabMRUEntry[],
+    tabId: number
+  ): { entry: TabMRUEntry; index: number } | null {
+    const index = tabarr.findIndex((entry) => entry.tabId === tabId);
+    if (index === -1) return null;
+    return { entry: tabarr[index], index };
   }
 
   /**
@@ -73,10 +136,25 @@ export class TabManager {
       return;
     }
 
-    const tracker = windowManager.getWindowTracker(tabObj.windowId);
+    let tracker = windowManager.getWindowTracker(tabObj.windowId);
     if (!tracker) {
-      logger.debug(`${logPrefix}Window ${tabObj.windowId} not found in tracking`);
-      return;
+      logger.debug(
+        `${logPrefix}Window ${tabObj.windowId} not found in tracking - triggering reconciliation`
+      );
+
+      // Trigger reconciliation to fix missing window/tab tracking
+      try {
+        await windowManager.reconcileWithBrowserState();
+        // Try to get the tracker again after reconciliation
+        tracker = windowManager.getWindowTracker(tabObj.windowId);
+      } catch (error) {
+        logger.error(`${logPrefix}Reconciliation failed`, error);
+      }
+
+      if (!tracker) {
+        logger.warn(`${logPrefix}Window ${tabObj.windowId} still not found after reconciliation`);
+        return;
+      }
     }
 
     const settings = settingsManager.getSettings();
@@ -91,15 +169,21 @@ export class TabManager {
 
     // Handle new tab selection and tracking based on ntsel option
     if (tabObj.id) {
-      if (settings.ntsel) {
-        // Select new tab and add to end of array (most recently used)
-        this.setFocus(tabObj.id, "NewTab");
-        tracker.tabarr.push(tabObj.id);
-        logger.debug(`${logPrefix}[select new tab]`);
+      // Check if tab is already in MRU (in case reconciliation added it)
+      const existingIndex = tracker.tabarr.findIndex((entry) => entry.tabId === tabObj.id);
+      if (existingIndex === -1) {
+        if (settings.ntsel) {
+          // Select new tab and add to end of array (most recently used)
+          this.setFocus(tabObj.id, "NewTab");
+          this.addTabToMRU(tracker.tabarr, tabObj.id, "last");
+          logger.debug(`${logPrefix}[select new tab]`);
+        } else {
+          // Chrome standard behavior - don't select, add to beginning
+          this.addTabToMRU(tracker.tabarr, tabObj.id, "first");
+          logger.debug(`${logPrefix}[chrome standard - don't select]`);
+        }
       } else {
-        // Chrome standard behavior - don't select, add to beginning
-        tracker.tabarr.unshift(tabObj.id);
-        logger.debug(`${logPrefix}[chrome standard - don't select]`);
+        logger.debug(`${logPrefix}Tab already exists in MRU at index ${existingIndex}`);
       }
       await storageManager.saveTrackingState(windowManager.getAllTrackers());
     }
@@ -163,19 +247,21 @@ export class TabManager {
     const tabcount = tabarr.length;
 
     logger.debug(`CloseTab: tabid ${tabId}, flip option: ${settings.flip}`);
-    logger.debug(`CloseTab: (before) [${tabarr}]`);
+    logger.debug(`CloseTab: (before) [${tabarr.map((e) => e.tabId)}]`);
 
     tabarr.splice(tabloc, 1);
-    logger.debug(`CloseTab: (after) [${tabarr}]`);
+    logger.debug(`CloseTab: (after) [${tabarr.map((e) => e.tabId)}]`);
 
     await storageManager.saveTrackingState(windowManager.getAllTrackers());
 
     // Handle tab selection after close - only if there are remaining tabs and flip is enabled
     if (tabarr.length > 0 && settings.flip) {
-      // Always select the last tab in the MRU order (most recently used)
-      const nextTabId = tabarr[tabarr.length - 1];
-      logger.debug(`CloseTab: Tab flipping ON - selecting last tab: ${nextTabId}`);
-      this.setFocus(nextTabId, "CloseTab");
+      // Always select the most recently used tab (highest order)
+      const nextTabId = this.getMostRecentTabId(tabarr);
+      if (nextTabId) {
+        logger.debug(`CloseTab: Tab flipping ON - selecting most recent tab: ${nextTabId}`);
+        this.setFocus(nextTabId, "CloseTab");
+      }
     } else {
       logger.debug(
         `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`
@@ -193,29 +279,60 @@ export class TabManager {
       return;
     }
 
-    const tracker = windowManager.getWindowTracker(info.windowId);
+    let tracker = windowManager.getWindowTracker(info.windowId);
     if (!tracker) {
-      logger.debug(`Shuffle: window ${info.windowId} not found`);
-      return;
+      logger.debug(`Shuffle: window ${info.windowId} not found - triggering reconciliation`);
+
+      // Trigger reconciliation to fix missing window/tab tracking
+      try {
+        await windowManager.reconcileWithBrowserState();
+        // Try to get the tracker again after reconciliation
+        tracker = windowManager.getWindowTracker(info.windowId);
+      } catch (error) {
+        logger.error(`Shuffle: Reconciliation failed`, error);
+      }
+
+      if (!tracker) {
+        logger.warn(`Shuffle: window ${info.windowId} still not found after reconciliation`);
+        return;
+      }
     }
 
     const tabarr = tracker.tabarr;
-    const tabIndex = tabarr.indexOf(info.tabId);
+    let tabInfo = this.findTabInMRU(tabarr, info.tabId);
 
-    if (tabIndex === -1) {
-      logger.debug(`Shuffle: tabId not found, tabarr: [${tabarr}]`);
+    if (!tabInfo) {
+      logger.debug(`Shuffle: tabId ${info.tabId} not found in MRU - triggering reconciliation`);
+
+      // Trigger reconciliation to fix missing tab tracking
+      try {
+        await windowManager.reconcileWithBrowserState();
+        // Try to find the tab again after reconciliation
+        tabInfo = this.findTabInMRU(tabarr, info.tabId);
+      } catch (error) {
+        logger.error(`Shuffle: Reconciliation failed`, error);
+      }
+
+      if (!tabInfo) {
+        logger.warn(
+          `Shuffle: tabId ${info.tabId} still not found after reconciliation, tabarr: [${tabarr.map(
+            (e) => e.tabId
+          )}]`
+        );
+        return;
+      }
+    }
+
+    // Check if it's already the most recent (highest timestamp)
+    const mostRecentTabId = this.getMostRecentTabId(tabarr);
+    if (mostRecentTabId === info.tabId) {
+      logger.debug(`Shuffle: tabId ${info.tabId} already most recent`);
       return;
     }
 
-    if (tabIndex === tabarr.length - 1) {
-      logger.debug(`Shuffle: tabId ${info.tabId} already last`);
-      return;
-    }
-
-    logger.debug(`Shuffle: (before) [${tabarr}]`);
-    tabarr.splice(tabIndex, 1);
-    tabarr.push(info.tabId);
-    logger.debug(`Shuffle: (after) [${tabarr}]`);
+    logger.debug(`Shuffle: (before) [${tabarr.map((e) => e.tabId)}]`);
+    this.updateTabTimestamp(tabarr, info.tabId);
+    logger.debug(`Shuffle: (after) [${tabarr.map((e) => e.tabId)}]`);
 
     await storageManager.saveTrackingState(windowManager.getAllTrackers());
   }
@@ -225,8 +342,8 @@ export class TabManager {
    */
   public handleTabReplacement(newId: number, oldId: number, windowManager: any): void {
     const info = windowManager.findTab(oldId);
-    if (info.tabarr) {
-      info.tabarr[info.tabloc] = newId;
+    if (info.tabarr && info.tabloc !== -1) {
+      info.tabarr[info.tabloc].tabId = newId;
       logger.debug(`TabReplaced: ${oldId} -> ${newId}`);
     }
   }
@@ -237,7 +354,7 @@ export class TabManager {
   public handleTabAttach(tabId: number, attachInfo: any, windowManager: any): void {
     const tracker = windowManager.getWindowTracker(attachInfo.newWindowId);
     if (tracker) {
-      tracker.tabarr.push(tabId);
+      this.addTabToMRU(tracker.tabarr, tabId, "last");
       this.skipNextActivation = "Attach";
       logger.debug(`TabAttached: ${tabId} to window ${attachInfo.newWindowId}`);
     }
@@ -250,13 +367,10 @@ export class TabManager {
     const tracker = windowManager.getWindowTracker(detachInfo.oldWindowId);
     if (!tracker) return;
 
-    const tabIndex = tracker.tabarr.indexOf(tabId);
-    if (tabIndex !== -1) {
-      tracker.tabarr.splice(tabIndex, 1);
-    }
+    this.removeTabFromMRU(tracker.tabarr, tabId);
 
-    if (tracker.tabarr.length > 1) {
-      const lastTabId = tracker.tabarr[tracker.tabarr.length - 1];
+    if (tracker.tabarr.length > 0) {
+      const lastTabId = this.getMostRecentTabId(tracker.tabarr);
       if (lastTabId) {
         this.setFocus(lastTabId, "Detach");
       }
@@ -268,21 +382,41 @@ export class TabManager {
   /**
    * Handle tab flipping (when extension icon is clicked)
    */
-  public handleTabFlip(tab: any, windowManager: any): void {
+  public async handleTabFlip(tab: any, windowManager: any): Promise<void> {
     const settings = settingsManager.getSettings();
     if (!settings.flip || !tab.windowId) return;
 
-    const tracker = windowManager.getWindowTracker(tab.windowId);
-    if (!tracker || tracker.tabarr.length < 2) return;
+    let tracker = windowManager.getWindowTracker(tab.windowId);
+    if (!tracker) {
+      logger.debug(`TabFlip: window ${tab.windowId} not found - triggering reconciliation`);
 
-    // Switch to second-to-last tab (previous)
-    const tabIndex = tracker.tabarr.length - 2;
-    const tabId = tracker.tabarr[tabIndex];
-    if (tabId) {
-      tracker.tabarr.splice(tabIndex, 1);
-      tracker.tabarr.push(tabId);
-      this.setFocus(tabId, "TabFlip");
-      logger.debug(`TabFlip: Switched to previous tab ${tabId}`);
+      // Trigger reconciliation to fix missing window/tab tracking
+      try {
+        await windowManager.reconcileWithBrowserState();
+        // Try to get the tracker again after reconciliation
+        tracker = windowManager.getWindowTracker(tab.windowId);
+      } catch (error) {
+        logger.error(`TabFlip: Reconciliation failed`, error);
+      }
+
+      if (!tracker) {
+        logger.warn(`TabFlip: window ${tab.windowId} still not found after reconciliation`);
+        return;
+      }
+    }
+
+    if (tracker.tabarr.length < 2) {
+      logger.debug(`TabFlip: Not enough tabs in window ${tab.windowId}`);
+      return;
+    }
+
+    // Get the second most recent tab (previous in MRU order)
+    const sorted = [...tracker.tabarr].sort((a, b) => b.order - a.order);
+    if (sorted.length >= 2) {
+      const previousTabId = sorted[1].tabId;
+      this.updateTabTimestamp(tracker.tabarr, previousTabId);
+      this.setFocus(previousTabId, "TabFlip");
+      logger.debug(`TabFlip: Switched to previous tab ${previousTabId}`);
     }
   }
 }

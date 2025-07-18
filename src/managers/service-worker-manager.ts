@@ -6,6 +6,8 @@ import { storageManager } from "./storage-manager.js";
 export class ServiceWorkerManager {
   private static instance: ServiceWorkerManager;
   private isActive: boolean = false;
+  private lastActivationTime: number = 0;
+  private reconciliationCallback: (() => Promise<void>) | null = null;
 
   private constructor() {}
 
@@ -17,15 +19,23 @@ export class ServiceWorkerManager {
   }
 
   /**
+   * Set callback to be called when service worker reactivates
+   */
+  public setReconciliationCallback(callback: () => Promise<void>): void {
+    this.reconciliationCallback = callback;
+  }
+
+  /**
    * Initialize service worker lifecycle handlers
    */
   public initializeLifecycleHandlers(): void {
     this.isActive = true;
+    this.lastActivationTime = Date.now();
 
     // Handle service worker startup
-    chrome.runtime.onStartup.addListener(() => {
+    chrome.runtime.onStartup.addListener(async () => {
       logger.debug("Service worker started");
-      this.isActive = true;
+      await this.handleReactivation();
     });
 
     // Handle service worker suspension
@@ -36,9 +46,9 @@ export class ServiceWorkerManager {
     });
 
     // Handle service worker suspend cancellation
-    chrome.runtime.onSuspendCanceled.addListener(() => {
+    chrome.runtime.onSuspendCanceled.addListener(async () => {
       logger.debug("Service worker suspend canceled");
-      this.isActive = true;
+      await this.handleReactivation();
     });
 
     // Handle extension installation/update
@@ -50,8 +60,37 @@ export class ServiceWorkerManager {
         await storageManager.clearTrackingState();
       }
 
-      this.isActive = true;
+      await this.handleReactivation();
     });
+  }
+
+  /**
+   * Handle service worker reactivation
+   */
+  private async handleReactivation(): Promise<void> {
+    const now = Date.now();
+    const timeSinceLastActivation = now - this.lastActivationTime;
+
+    this.isActive = true;
+    this.lastActivationTime = now;
+
+    // If more than 5 seconds have passed since last activation, trigger reconciliation
+    if (timeSinceLastActivation > 5000) {
+      logger.debug(
+        `Service worker reactivated after ${timeSinceLastActivation}ms - triggering reconciliation`
+      );
+
+      // Small delay to allow any pending operations to complete
+      setTimeout(async () => {
+        if (this.reconciliationCallback) {
+          try {
+            await this.reconciliationCallback();
+          } catch (error) {
+            logger.error("Error during reconciliation after reactivation", error);
+          }
+        }
+      }, 100);
+    }
   }
 
   /**
@@ -64,10 +103,11 @@ export class ServiceWorkerManager {
   /**
    * Get service worker status
    */
-  public getStatus(): { active: boolean; timestamp: number } {
+  public getStatus(): { active: boolean; timestamp: number; lastActivation: number } {
     return {
       active: this.isActive,
       timestamp: Date.now(),
+      lastActivation: this.lastActivationTime,
     };
   }
 }

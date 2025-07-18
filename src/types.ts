@@ -1,7 +1,12 @@
 // Type definitions for FLST Chrome extension
 
+export interface TabMRUEntry {
+  tabId: number;
+  order: number; // Timestamp (Date.now()) for ordering
+}
+
 export interface TabTracker {
-  tabarr: number[];
+  tabarr: TabMRUEntry[];
   wid: number;
   moveok: boolean;
 }
@@ -27,7 +32,7 @@ export interface Extension {
 }
 
 export interface TabInfo {
-  tabarr: number[] | null;
+  tabarr: TabMRUEntry[] | null;
   tabloc: number;
 }
 

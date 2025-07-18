@@ -41,7 +41,10 @@ export class ExtensionCore {
       // Set up all event listeners
       this.setupEventListeners();
 
-      // Initialize service worker lifecycle
+      // Initialize service worker lifecycle with reconciliation callback
+      serviceWorkerManager.setReconciliationCallback(() =>
+        windowManager.reconcileWithBrowserState()
+      );
       serviceWorkerManager.initializeLifecycleHandlers();
 
       this.isInitialized = true;
@@ -143,7 +146,9 @@ export class ExtensionCore {
    * Handle extension icon clicked (tab flipping)
    */
   private handleExtensionClicked(tab: any): void {
-    tabManager.handleTabFlip(tab, windowManager);
+    tabManager.handleTabFlip(tab, windowManager).catch((error) => {
+      logger.error("Error handling tab flip", error);
+    });
   }
 
   /**
