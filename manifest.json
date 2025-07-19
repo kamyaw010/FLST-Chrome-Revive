@@ -35,6 +35,6 @@
   "minimum_chrome_version": "88",
   "name": "FLST Chrome Revive",
   "options_page": "options.html",
-  "permissions": ["contextMenus", "storage", "tabs"],
+  "permissions": ["storage"],
   "version": "3.1.0"
 }
