@@ -69,32 +69,41 @@ catch {
 if (-not $Watch) {
     # Copy static files
     Write-Info "Copying static files..."
-    
+
     # Copy manifest
     Copy-Item "manifest.json" "dist/" -Force
-    
+
     # Copy images
     Copy-Item "img" "dist/img" -Recurse -Force
-    
+
     # Copy HTML and CSS from root to dist
     Copy-Item "options.html" "dist/" -Force
     Copy-Item "options.css" "dist/" -Force
-    
+
     Write-Success "Static files copied"
-    
+
     # Create build package
     Write-Info "Creating build package..."
     $packageName = "${projectName}_${version}.zip"
     $packagePath = "build/$packageName"
-    
-    if (Test-Path $packagePath) {
-        Remove-Item $packagePath -Force
+
+    # For production builds, clean up existing zip files first
+    if ($Mode -eq "production") {
+        Write-Info "Cleaning existing zip files from build folder..."
+        Get-ChildItem "build" -Filter "*.zip" | Remove-Item -Force
+        Write-Success "Existing zip files removed"
     }
-    
+    else {
+        # For development builds, only remove the specific file if it exists
+        if (Test-Path $packagePath) {
+            Remove-Item $packagePath -Force
+        }
+    }
+
     # Create zip for distribution
     Compress-Archive -Path "dist/*" -DestinationPath $packagePath -Force
     Write-Success "Build package created: $packagePath"
-    
+
     # Show build summary
     Write-Info "Build Summary:"
     Write-Host "  Project: $projectName" -ForegroundColor White
@@ -102,10 +111,10 @@ if (-not $Watch) {
     Write-Host "  Mode: $Mode" -ForegroundColor White
     Write-Host "  Output: dist/" -ForegroundColor White
     Write-Host "  Package: $packagePath" -ForegroundColor White
-    
+
     $distSize = (Get-ChildItem "dist" -Recurse | Measure-Object -Property Length -Sum).Sum
     $distSizeKB = [math]::Round($distSize / 1KB, 2)
     Write-Host "  Size: $distSizeKB KB" -ForegroundColor White
-    
+
     Write-Success "Build completed successfully!"
 }
