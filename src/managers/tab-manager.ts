@@ -3,11 +3,18 @@
 import { logger } from "../utils/logger.js";
 import { storageManager } from "./storage-manager.js";
 import { settingsManager } from "./settings-manager.js";
-import type { TabTracker, TabInfo, SafeTabMoveCallback, TabMRUEntry } from "../types.js";
+import { SkipActivationReason } from "../types.js";
+import type {
+  TabTracker,
+  TabInfo,
+  SafeTabMoveCallback,
+  TabMRUEntry,
+  SkipActivationInfo,
+} from "../types.js";
 
 export class TabManager {
   private static instance: TabManager;
-  private skipNextActivation: string | null = null;
+  private skipNextActivation: SkipActivationInfo | null = null;
 
   private constructor() {}
 
@@ -118,11 +125,49 @@ export class TabManager {
   }
 
   /**
-   * Focus a tab and prevent reordering
+   * Focus a tab and prevent reordering with retry logic
    */
-  public setFocus(tabId: number, reason: string): void {
-    this.skipNextActivation = reason;
-    chrome.tabs.update(tabId, { active: true });
+  public setFocus(tabId: number, reason: SkipActivationReason): void {
+    this.skipNextActivation = { reason };
+    this.safeTabUpdate(tabId, { active: true });
+  }
+
+  /**
+   * Safe tab update with retry logic for handling drag operations
+   */
+  private safeTabUpdate(tabId: number, updateProperties: any, retryCount: number = 0): void {
+    const maxRetries = 3;
+    const retryDelay = 200;
+
+    chrome.tabs.update(tabId, updateProperties, (result: any) => {
+      if (chrome.runtime.lastError) {
+        const errorMsg = chrome.runtime.lastError.message;
+
+        if (errorMsg?.includes("user may be dragging") && retryCount < maxRetries) {
+          logger.debug(
+            `Tab update failed (user dragging), retrying in ${retryDelay}ms (attempt ${
+              retryCount + 1
+            }/${maxRetries})`
+          );
+          setTimeout(() => {
+            this.safeTabUpdate(tabId, updateProperties, retryCount + 1);
+          }, retryDelay);
+          return;
+        }
+
+        // If it's still a dragging error after all retries, just log as debug instead of error
+        if (errorMsg?.includes("user may be dragging")) {
+          logger.debug(
+            `Tab update abandoned after ${maxRetries} retries - user still dragging tab ${tabId}`
+          );
+        } else {
+          // Log other errors normally
+          logger.error(`Tab update failed: ${errorMsg}`);
+        }
+      } else {
+        logger.debug(`Tab ${tabId} updated successfully`);
+      }
+    });
   }
 
   /**
@@ -174,7 +219,7 @@ export class TabManager {
       if (existingIndex === -1) {
         if (settings.ntsel) {
           // Select new tab and add to end of array (most recently used)
-          this.setFocus(tabObj.id, "NewTab");
+          this.setFocus(tabObj.id, SkipActivationReason.NEW_TAB);
           this.addTabToMRU(tracker.tabarr, tabObj.id, "last");
           logger.debug(`${logPrefix}[select new tab]`);
         } else {
@@ -235,6 +280,8 @@ export class TabManager {
    * Handle tab closing
    */
   public async handleTabClose(tabId: number, windowManager: any): Promise<void> {
+    logger.debug(`TabManager: handleTabClose called for tabId ${tabId}`);
+
     const info = windowManager.findTab(tabId);
     if (!info.tabarr) {
       logger.debug(`CloseTab: tabid ${tabId} not found`);
@@ -244,39 +291,81 @@ export class TabManager {
     const settings = settingsManager.getSettings();
     const tabarr = info.tabarr;
     const tabloc = info.tabloc;
-    const tabcount = tabarr.length;
 
     logger.debug(`CloseTab: tabid ${tabId}, flip option: ${settings.flip}`);
     logger.debug(`CloseTab: (before) [${tabarr.map((e) => e.tabId)}]`);
 
-    tabarr.splice(tabloc, 1);
-    logger.debug(`CloseTab: (after) [${tabarr.map((e) => e.tabId)}]`);
-
-    await storageManager.saveTrackingState(windowManager.getAllTrackers());
-
-    // Handle tab selection after close - only if there are remaining tabs and flip is enabled
-    if (tabarr.length > 0 && settings.flip) {
-      // Always select the most recently used tab (highest order)
-      const nextTabId = this.getMostRecentTabId(tabarr);
+    // Handle tab selection BEFORE removing from MRU if flip is enabled
+    if (tabarr.length > 1 && settings.flip) {
+      // Get the most recent tab BEFORE removing the current tab
+      const nextTabId = this.getMostRecentTabExcluding(tabarr, tabId);
       if (nextTabId) {
-        logger.debug(`CloseTab: Tab flipping ON - selecting most recent tab: ${nextTabId}`);
-        this.setFocus(nextTabId, "CloseTab");
+        logger.debug(`CloseTab: Tab flipping ON - will select most recent tab: ${nextTabId}`);
+
+        // Store the expected next tab to handle Chrome's automatic selection
+        this.skipNextActivation = {
+          reason: SkipActivationReason.CLOSE_TAB,
+          expectedTabId: nextTabId,
+        };
+
+        // Immediately select the correct tab
+        this.setFocus(nextTabId, SkipActivationReason.CLOSE_TAB);
       }
     } else {
       logger.debug(
         `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`
       );
     }
+
+    // Remove the tab from MRU
+    tabarr.splice(tabloc, 1);
+    logger.debug(`CloseTab: (after) [${tabarr.map((e) => e.tabId)}]`);
+
+    await storageManager.saveTrackingState(windowManager.getAllTrackers());
   }
 
+  /**
+   * Get most recently used tab ID excluding a specific tab
+   */
+  private getMostRecentTabExcluding(tabarr: TabMRUEntry[], excludeTabId: number): number | null {
+    if (tabarr.length === 0) return null;
+
+    // Filter out the excluded tab and sort by timestamp to get the most recent
+    const filtered = tabarr.filter((entry) => entry.tabId !== excludeTabId);
+    if (filtered.length === 0) return null;
+
+    const sorted = [...filtered].sort((a, b) => b.order - a.order);
+    return sorted[0].tabId;
+  }
   /**
    * Handle tab activation (selection)
    */
   public async handleTabActivation(info: any, windowManager: any): Promise<void> {
     if (this.skipNextActivation) {
-      logger.debug(`Shuffle: skip => ${this.skipNextActivation}`);
-      this.skipNextActivation = null;
-      return;
+      const skipInfo = this.skipNextActivation;
+      logger.debug(`Shuffle: skip => ${skipInfo.reason}`);
+
+      // Check if this is the expected tab from a close operation
+      if (skipInfo.reason === SkipActivationReason.CLOSE_TAB && skipInfo.expectedTabId) {
+        if (skipInfo.expectedTabId === info.tabId) {
+          logger.debug(
+            `Shuffle: Expected tab ${skipInfo.expectedTabId} activated after close - allowing`
+          );
+          this.skipNextActivation = null;
+          // Don't return - let it update the timestamp normally
+        } else {
+          logger.debug(
+            `Shuffle: Unexpected tab ${info.tabId} activated, expected ${skipInfo.expectedTabId} - correcting`
+          );
+          this.skipNextActivation = null;
+          // Try to select the correct tab again
+          this.setFocus(skipInfo.expectedTabId, SkipActivationReason.CLOSE_TAB_CORRECTION);
+          return;
+        }
+      } else {
+        this.skipNextActivation = null;
+        return;
+      }
     }
 
     let tracker = windowManager.getWindowTracker(info.windowId);
@@ -355,7 +444,7 @@ export class TabManager {
     const tracker = windowManager.getWindowTracker(attachInfo.newWindowId);
     if (tracker) {
       this.addTabToMRU(tracker.tabarr, tabId, "last");
-      this.skipNextActivation = "Attach";
+      this.skipNextActivation = { reason: SkipActivationReason.ATTACH };
       logger.debug(`TabAttached: ${tabId} to window ${attachInfo.newWindowId}`);
     }
   }
@@ -369,10 +458,14 @@ export class TabManager {
 
     this.removeTabFromMRU(tracker.tabarr, tabId);
 
+    logger.debug(`Tracker: ${tracker.tabarr.length}`);
     if (tracker.tabarr.length > 0) {
       const lastTabId = this.getMostRecentTabId(tracker.tabarr);
+      logger.debug(
+        `TabDetached: ${tabId} from window ${detachInfo.oldWindowId}, last tab: ${lastTabId}`
+      );
       if (lastTabId) {
-        this.setFocus(lastTabId, "Detach");
+        this.setFocus(lastTabId, SkipActivationReason.DETACH);
       }
     }
 
@@ -415,7 +508,7 @@ export class TabManager {
     if (sorted.length >= 2) {
       const previousTabId = sorted[1].tabId;
       this.updateTabTimestamp(tracker.tabarr, previousTabId);
-      this.setFocus(previousTabId, "TabFlip");
+      this.setFocus(previousTabId, SkipActivationReason.TAB_FLIP);
       logger.debug(`TabFlip: Switched to previous tab ${previousTabId}`);
     }
   }

@@ -2,7 +2,7 @@
 
 export class Logger {
   private static instance: Logger;
-  private isEnabled: boolean = false;
+  private isEnabled: boolean = false; // Disabled for production
 
   private constructor() {}
 

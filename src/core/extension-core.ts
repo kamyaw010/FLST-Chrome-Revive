@@ -40,6 +40,7 @@ export class ExtensionCore {
 
       // Set up all event listeners
       this.setupEventListeners();
+      logger.debug("Event listeners setup completed");
 
       // Initialize service worker lifecycle with reconciliation callback
       serviceWorkerManager.setReconciliationCallback(() =>
@@ -59,9 +60,12 @@ export class ExtensionCore {
    * Set up all Chrome extension event listeners
    */
   private setupEventListeners(): void {
+    logger.debug("Setting up Chrome extension event listeners...");
+
     // Window events
     chrome.windows.onCreated.addListener(this.handleWindowCreated.bind(this));
     chrome.windows.onRemoved.addListener(this.handleWindowRemoved.bind(this));
+    logger.debug("Window event listeners added");
 
     // Tab events
     chrome.tabs.onCreated.addListener(this.handleTabCreated.bind(this));
@@ -70,11 +74,13 @@ export class ExtensionCore {
     chrome.tabs.onDetached.addListener(this.handleTabDetached.bind(this));
     chrome.tabs.onActivated.addListener(this.handleTabActivated.bind(this));
     chrome.tabs.onReplaced.addListener(this.handleTabReplaced.bind(this));
+    logger.debug("Tab event listeners added");
 
     // Extension events
     chrome.action.onClicked.addListener(this.handleExtensionClicked.bind(this));
     chrome.runtime.onInstalled.addListener(this.handleInstalled.bind(this));
     chrome.runtime.onMessage.addListener(this.handleMessage.bind(this));
+    logger.debug("Extension event listeners added");
 
     logger.debug("Event listeners set up successfully");
   }
@@ -104,6 +110,7 @@ export class ExtensionCore {
    * Handle tab creation
    */
   private handleTabCreated(tab: any): void {
+    logger.debug(`Extension Core: Tab created event fired for tabId ${tab.id}`);
     tabManager.handleNewTab(tab, windowManager);
   }
 
@@ -111,6 +118,7 @@ export class ExtensionCore {
    * Handle tab removal
    */
   private handleTabRemoved(tabId: number): void {
+    logger.debug(`Extension Core: Tab removed event fired for tabId ${tabId}`);
     tabManager.handleTabClose(tabId, windowManager);
   }
 
@@ -132,6 +140,7 @@ export class ExtensionCore {
    * Handle tab activation
    */
   private handleTabActivated(activeInfo: any): void {
+    logger.debug(`Extension Core: Tab activated event fired for tabId ${activeInfo.tabId}`);
     tabManager.handleTabActivation(activeInfo, windowManager);
   }
 

@@ -49,6 +49,21 @@ export interface SafeTabMoveCallback {
   (result: any, error: string | null): void;
 }
 
+// Skip activation reasons
+export enum SkipActivationReason {
+  NEW_TAB = "NewTab",
+  ATTACH = "Attach",
+  DETACH = "Detach",
+  TAB_FLIP = "TabFlip",
+  CLOSE_TAB = "CloseTab",
+  CLOSE_TAB_CORRECTION = "CloseTab-Correction",
+}
+
+export interface SkipActivationInfo {
+  reason: SkipActivationReason;
+  expectedTabId?: number;
+}
+
 export interface StorageData {
   [key: string]: any;
   flip?: number;
