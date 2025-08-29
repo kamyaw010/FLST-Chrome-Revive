@@ -279,14 +279,22 @@ export class WindowManager {
   }
 
   /**
-   * Reconcile MRU arrays with actual browser tabs
+   * Reconcile MRU arrays with actual browser tabs (optimized for performance)
    * This is crucial after service worker reactivation
    */
   public async reconcileWithBrowserState(): Promise<void> {
     logger.debug("Starting MRU reconciliation with browser state...");
 
     return new Promise((resolve) => {
+      // Add timeout to prevent hanging on slower machines
+      const timeoutId = setTimeout(() => {
+        logger.warn("Reconciliation timed out after 10 seconds");
+        resolve();
+      }, 10000);
+
       chrome.windows.getAll({ populate: true }, async (windows: any[]) => {
+        clearTimeout(timeoutId);
+
         if (chrome.runtime.lastError) {
           logger.error("Failed to get windows for reconciliation", chrome.runtime.lastError);
           resolve();
@@ -294,104 +302,128 @@ export class WindowManager {
         }
 
         let reconciliationChanges = 0;
+        const startTime = Date.now();
 
-        for (const window of windows) {
-          if (!window || !window.id || !window.tabs) continue;
+        try {
+          // Process windows in batches for better performance
+          const batchSize = 3;
+          for (let i = 0; i < windows.length; i += batchSize) {
+            const windowBatch = windows.slice(i, i + batchSize);
 
-          // Find or create tracker for this window
-          let tracker = this.trackers.find((t) => t.wid === window.id);
-          if (!tracker) {
-            logger.debug(`Creating new tracker for window ${window.id} during reconciliation`);
-            await this.addWindow(window);
-            reconciliationChanges++;
-            continue;
-          }
+            await Promise.all(
+              windowBatch.map(async (window) => {
+                if (!window || !window.id || !window.tabs) return;
 
-          // Get current tab IDs in the window
-          const currentTabIds = window.tabs
-            .map((tab: any) => tab.id)
-            .filter((id: number) => id != null);
-          const trackedTabIds = tracker.tabarr.map((entry) => entry.tabId);
-
-          // Find tabs that exist in browser but not in MRU
-          const missingTabs = currentTabIds.filter(
-            (tabId: number) => !trackedTabIds.includes(tabId)
-          );
-
-          if (missingTabs.length > 0) {
-            logger.debug(
-              `Found ${missingTabs.length} missing tabs in window ${window.id}: [${missingTabs.join(
-                ", "
-              )}]`
+                reconciliationChanges += await this.reconcileWindow(window);
+              })
             );
 
-            // Add missing tabs to MRU with current timestamp
-            for (const tabId of missingTabs) {
-              const tab = window.tabs.find((t: any) => t.id === tabId);
-              if (tab) {
-                const entry = this.createTabEntry(tabId);
-
-                // If this is the active tab, put it at the end (most recent)
-                if (tab.active) {
-                  tracker.tabarr.push(entry);
-                  logger.debug(`Added active tab ${tabId} to end of MRU for window ${window.id}`);
-                } else {
-                  // Insert non-active tabs at the beginning (less recent)
-                  tracker.tabarr.unshift(entry);
-                  logger.debug(
-                    `Added inactive tab ${tabId} to beginning of MRU for window ${window.id}`
-                  );
-                }
-                reconciliationChanges++;
-              }
+            // Add small delay between batches to prevent blocking
+            if (i + batchSize < windows.length) {
+              await new Promise((resolve) => setTimeout(resolve, 10));
             }
           }
 
-          // Remove tabs that are in MRU but don't exist in browser
-          const orphanedTabs = trackedTabIds.filter(
-            (tabId: number) => !currentTabIds.includes(tabId)
+          // Remove trackers for windows that no longer exist
+          const currentWindowIds = windows.map((w) => w.id);
+          const orphanedTrackers = this.trackers.filter(
+            (tracker) => !currentWindowIds.includes(tracker.wid)
           );
 
-          if (orphanedTabs.length > 0) {
-            logger.debug(
-              `Found ${orphanedTabs.length} orphaned tabs in window ${
-                window.id
-              }: [${orphanedTabs.join(", ")}]`
+          if (orphanedTrackers.length > 0) {
+            logger.debug(`Found ${orphanedTrackers.length} orphaned window trackers`);
+            this.trackers = this.trackers.filter((tracker) =>
+              currentWindowIds.includes(tracker.wid)
             );
-
-            for (const tabId of orphanedTabs) {
-              const index = tracker.tabarr.findIndex((entry) => entry.tabId === tabId);
-              if (index !== -1) {
-                tracker.tabarr.splice(index, 1);
-                logger.debug(`Removed orphaned tab ${tabId} from MRU for window ${window.id}`);
-                reconciliationChanges++;
-              }
-            }
+            reconciliationChanges += orphanedTrackers.length;
           }
-        }
 
-        // Remove trackers for windows that no longer exist
-        const currentWindowIds = windows.map((w) => w.id);
-        const orphanedTrackers = this.trackers.filter(
-          (tracker) => !currentWindowIds.includes(tracker.wid)
-        );
-
-        if (orphanedTrackers.length > 0) {
-          logger.debug(`Found ${orphanedTrackers.length} orphaned window trackers`);
-          this.trackers = this.trackers.filter((tracker) => currentWindowIds.includes(tracker.wid));
-          reconciliationChanges += orphanedTrackers.length;
-        }
-
-        if (reconciliationChanges > 0) {
-          logger.debug(`Reconciliation completed with ${reconciliationChanges} changes`);
-          await storageManager.saveTrackingState(this.trackers);
-        } else {
-          logger.debug("Reconciliation completed - no changes needed");
+          if (reconciliationChanges > 0) {
+            logger.debug(
+              `Reconciliation completed with ${reconciliationChanges} changes in ${
+                Date.now() - startTime
+              }ms`
+            );
+            await storageManager.saveTrackingState(this.trackers, true); // Immediate save for reconciliation
+          } else {
+            logger.debug(
+              `Reconciliation completed - no changes needed (${Date.now() - startTime}ms)`
+            );
+          }
+        } catch (error) {
+          logger.error("Error during reconciliation", error);
         }
 
         resolve();
       });
     });
+  }
+
+  /**
+   * Reconcile a single window (helper method for better performance)
+   */
+  private async reconcileWindow(window: any): Promise<number> {
+    let changes = 0;
+
+    // Find or create tracker for this window
+    let tracker = this.trackers.find((t) => t.wid === window.id);
+    if (!tracker) {
+      logger.debug(`Creating new tracker for window ${window.id} during reconciliation`);
+      await this.addWindow(window);
+      return 1;
+    }
+
+    // Get current tab IDs in the window (optimized)
+    const currentTabIds = window.tabs.map((tab: any) => tab.id).filter((id: number) => id != null);
+    const trackedTabIds = tracker.tabarr.map((entry) => entry.tabId);
+
+    // Find tabs that exist in browser but not in MRU
+    const missingTabs = currentTabIds.filter((tabId: number) => !trackedTabIds.includes(tabId));
+
+    if (missingTabs.length > 0) {
+      logger.debug(
+        `Found ${missingTabs.length} missing tabs in window ${window.id}: [${missingTabs.join(
+          ", "
+        )}]`
+      );
+
+      // Add missing tabs to MRU with current timestamp
+      for (const tabId of missingTabs) {
+        const tab = window.tabs.find((t: any) => t.id === tabId);
+        if (tab) {
+          const entry = this.createTabEntry(tabId);
+
+          // If this is the active tab, put it at the end (most recent)
+          if (tab.active) {
+            tracker.tabarr.push(entry);
+            logger.debug(`Added active tab ${tabId} to end of MRU for window ${window.id}`);
+          } else {
+            // Insert non-active tabs at the beginning (less recent)
+            tracker.tabarr.unshift(entry);
+            logger.debug(`Added inactive tab ${tabId} to beginning of MRU for window ${window.id}`);
+          }
+          changes++;
+        }
+      }
+    }
+
+    // Remove tabs that are in MRU but don't exist in browser
+    const orphanedTabs = trackedTabIds.filter((tabId: number) => !currentTabIds.includes(tabId));
+
+    if (orphanedTabs.length > 0) {
+      logger.debug(
+        `Found ${orphanedTabs.length} orphaned tabs in window ${window.id}: [${orphanedTabs.join(
+          ", "
+        )}]`
+      );
+
+      // Remove orphaned tabs (use filter for better performance than splice)
+      const originalLength = tracker.tabarr.length;
+      tracker.tabarr = tracker.tabarr.filter((entry) => !orphanedTabs.includes(entry.tabId));
+      changes += originalLength - tracker.tabarr.length;
+    }
+
+    return changes;
   }
 }
 

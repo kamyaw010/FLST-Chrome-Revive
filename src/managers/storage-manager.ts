@@ -5,6 +5,9 @@ import type { StorageData, TabTracker, StoredTrackingState } from "../types.js";
 
 export class StorageManager {
   private static instance: StorageManager;
+  private saveDebounceTimer: number | null = null;
+  private pendingTrackingState: TabTracker[] | null = null;
+  private readonly SAVE_DEBOUNCE_DELAY = 500; // 500ms debounce for performance
 
   private constructor() {}
 
@@ -89,20 +92,64 @@ export class StorageManager {
   }
 
   /**
-   * Save tracking state to storage with timestamp
+   * Save tracking state to storage with debouncing for performance
    */
-  public async saveTrackingState(trackingState: TabTracker[]): Promise<void> {
+  public async saveTrackingState(
+    trackingState: TabTracker[],
+    immediate: boolean = false
+  ): Promise<void> {
+    // Store the latest state
+    this.pendingTrackingState = trackingState;
+
+    // If immediate save is requested, skip debouncing
+    if (immediate) {
+      await this.performSave();
+      return;
+    }
+
+    // Clear existing timer and set new one for debouncing
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+    }
+
+    this.saveDebounceTimer = setTimeout(async () => {
+      await this.performSave();
+    }, this.SAVE_DEBOUNCE_DELAY);
+  }
+
+  /**
+   * Perform the actual save operation
+   */
+  private async performSave(): Promise<void> {
+    if (!this.pendingTrackingState) return;
+
     try {
       const stateData = {
-        trackingState,
+        trackingState: this.pendingTrackingState,
         timestamp: Date.now(),
-        version: "3.0.3",
+        version: "3.2.0",
       };
+
       await this.setSetting("flstState", stateData);
-      logger.debug(`Tracking state saved: ${trackingState.length} windows`);
+      logger.debug(`Tracking state saved: ${this.pendingTrackingState.length} windows`);
+
+      // Clear pending state after successful save
+      this.pendingTrackingState = null;
+      this.saveDebounceTimer = null;
     } catch (error) {
       logger.error("Error saving tracking state", error);
     }
+  }
+
+  /**
+   * Force immediate save of any pending tracking state
+   */
+  public async flushTrackingState(): Promise<void> {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    await this.performSave();
   }
 
   /**

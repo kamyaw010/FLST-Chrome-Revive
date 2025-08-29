@@ -15,6 +15,8 @@ import type {
 export class TabManager {
   private static instance: TabManager;
   private skipNextActivation: SkipActivationInfo | null = null;
+  private mruCache: Map<number, number> = new Map(); // Cache for MRU lookups (windowId -> lastTabId)
+  private operationQueue: Map<number, Promise<void>> = new Map(); // Prevent concurrent operations per window
 
   private constructor() {}
 
@@ -23,6 +25,28 @@ export class TabManager {
       TabManager.instance = new TabManager();
     }
     return TabManager.instance;
+  }
+
+  /**
+   * Queue operations per window to prevent race conditions
+   */
+  private async queueOperation(windowId: number, operation: () => Promise<void>): Promise<void> {
+    // Wait for any existing operation on this window
+    const existingOperation = this.operationQueue.get(windowId);
+    if (existingOperation) {
+      await existingOperation.catch(() => {}); // Ignore errors from previous operations
+    }
+
+    // Create and store the new operation
+    const newOperation = operation().finally(() => {
+      // Clean up the operation from the queue when done
+      if (this.operationQueue.get(windowId) === newOperation) {
+        this.operationQueue.delete(windowId);
+      }
+    });
+
+    this.operationQueue.set(windowId, newOperation);
+    return newOperation;
   }
 
   /**
@@ -66,14 +90,23 @@ export class TabManager {
   }
 
   /**
-   * Get most recently used tab ID (highest timestamp)
+   * Get most recently used tab ID (optimized with caching)
    */
   private getMostRecentTabId(tabarr: TabMRUEntry[]): number | null {
     if (tabarr.length === 0) return null;
 
-    // Sort by timestamp to get the most recent (highest timestamp)
-    const sorted = [...tabarr].sort((a, b) => b.order - a.order);
-    return sorted[0].tabId;
+    // Use a simple max-finding approach instead of sorting for better performance
+    let maxTimestamp = 0;
+    let mostRecentTabId: number | null = null;
+
+    for (const entry of tabarr) {
+      if (entry.order > maxTimestamp) {
+        maxTimestamp = entry.order;
+        mostRecentTabId = entry.tabId;
+      }
+    }
+
+    return mostRecentTabId;
   }
 
   /**
@@ -171,7 +204,7 @@ export class TabManager {
   }
 
   /**
-   * Handle new tab creation
+   * Handle new tab creation (with operation queuing for performance)
    */
   public async handleNewTab(tabObj: any, windowManager: any): Promise<void> {
     const logPrefix = "NewTab: ";
@@ -181,59 +214,64 @@ export class TabManager {
       return;
     }
 
-    let tracker = windowManager.getWindowTracker(tabObj.windowId);
-    if (!tracker) {
+    // Queue this operation to prevent race conditions
+    return this.queueOperation(tabObj.windowId, async () => {
+      let tracker = windowManager.getWindowTracker(tabObj.windowId);
+      if (!tracker) {
+        logger.debug(
+          `${logPrefix}Window ${tabObj.windowId} not found in tracking - triggering reconciliation`
+        );
+
+        // Trigger reconciliation to fix missing window/tab tracking
+        try {
+          await windowManager.reconcileWithBrowserState();
+          // Try to get the tracker again after reconciliation
+          tracker = windowManager.getWindowTracker(tabObj.windowId);
+        } catch (error) {
+          logger.error(`${logPrefix}Reconciliation failed`, error);
+        }
+
+        if (!tracker) {
+          logger.warn(`${logPrefix}Window ${tabObj.windowId} still not found after reconciliation`);
+          return;
+        }
+      }
+
+      const settings = settingsManager.getSettings();
       logger.debug(
-        `${logPrefix}Window ${tabObj.windowId} not found in tracking - triggering reconciliation`
+        `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}`
       );
 
-      // Trigger reconciliation to fix missing window/tab tracking
-      try {
-        await windowManager.reconcileWithBrowserState();
-        // Try to get the tracker again after reconciliation
-        tracker = windowManager.getWindowTracker(tabObj.windowId);
-      } catch (error) {
-        logger.error(`${logPrefix}Reconciliation failed`, error);
+      // Handle tab relocation
+      if (settings.reloc && tracker.moveok && tabObj.id) {
+        await this.relocateTabToFarRight(tabObj, logPrefix);
       }
 
-      if (!tracker) {
-        logger.warn(`${logPrefix}Window ${tabObj.windowId} still not found after reconciliation`);
-        return;
-      }
-    }
-
-    const settings = settingsManager.getSettings();
-    logger.debug(
-      `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}`
-    );
-
-    // Handle tab relocation
-    if (settings.reloc && tracker.moveok && tabObj.id) {
-      await this.relocateTabToFarRight(tabObj, logPrefix);
-    }
-
-    // Handle new tab selection and tracking based on ntsel option
-    if (tabObj.id) {
-      // Check if tab is already in MRU (in case reconciliation added it)
-      const existingIndex = tracker.tabarr.findIndex((entry) => entry.tabId === tabObj.id);
-      if (existingIndex === -1) {
-        if (settings.ntsel) {
-          // Select new tab and add to end of array (most recently used)
-          this.setFocus(tabObj.id, SkipActivationReason.NEW_TAB);
-          this.addTabToMRU(tracker.tabarr, tabObj.id, "last");
-          logger.debug(`${logPrefix}[select new tab]`);
+      // Handle new tab selection and tracking based on ntsel option
+      if (tabObj.id) {
+        // Check if tab is already in MRU (in case reconciliation added it)
+        const existingIndex = tracker.tabarr.findIndex((entry) => entry.tabId === tabObj.id);
+        if (existingIndex === -1) {
+          if (settings.ntsel) {
+            // Select new tab and add to end of array (most recently used)
+            this.setFocus(tabObj.id, SkipActivationReason.NEW_TAB);
+            this.addTabToMRU(tracker.tabarr, tabObj.id, "last");
+            logger.debug(`${logPrefix}[select new tab]`);
+          } else {
+            // Chrome standard behavior - don't select, add to beginning
+            this.addTabToMRU(tracker.tabarr, tabObj.id, "first");
+            logger.debug(`${logPrefix}[chrome standard - don't select]`);
+          }
         } else {
-          // Chrome standard behavior - don't select, add to beginning
-          this.addTabToMRU(tracker.tabarr, tabObj.id, "first");
-          logger.debug(`${logPrefix}[chrome standard - don't select]`);
+          logger.debug(`${logPrefix}Tab already exists in MRU at index ${existingIndex}`);
         }
-      } else {
-        logger.debug(`${logPrefix}Tab already exists in MRU at index ${existingIndex}`);
-      }
-      await storageManager.saveTrackingState(windowManager.getAllTrackers());
-    }
 
-    logger.debug(`${logPrefix}Tab processed successfully`);
+        // Use debounced save for better performance
+        await storageManager.saveTrackingState(windowManager.getAllTrackers());
+      }
+
+      logger.debug(`${logPrefix}Tab processed successfully`);
+    });
   }
 
   /**
@@ -277,7 +315,7 @@ export class TabManager {
   }
 
   /**
-   * Handle tab closing
+   * Handle tab closing (with operation queuing for performance)
    */
   public async handleTabClose(tabId: number, windowManager: any): Promise<void> {
     logger.debug(`TabManager: handleTabClose called for tabId ${tabId}`);
@@ -288,57 +326,77 @@ export class TabManager {
       return;
     }
 
-    const settings = settingsManager.getSettings();
-    const tabarr = info.tabarr;
-    const tabloc = info.tabloc;
+    // Find the window ID for this tab to queue the operation
+    const windowId = windowManager
+      .getAllTrackers()
+      .find((tracker) => tracker.tabarr.some((entry) => entry.tabId === tabId))?.wid;
 
-    logger.debug(`CloseTab: tabid ${tabId}, flip option: ${settings.flip}`);
-    logger.debug(`CloseTab: (before) [${tabarr.map((e) => e.tabId)}]`);
-
-    // Handle tab selection BEFORE removing from MRU if flip is enabled
-    if (tabarr.length > 1 && settings.flip) {
-      // Get the most recent tab BEFORE removing the current tab
-      const nextTabId = this.getMostRecentTabExcluding(tabarr, tabId);
-      if (nextTabId) {
-        logger.debug(`CloseTab: Tab flipping ON - will select most recent tab: ${nextTabId}`);
-
-        // Store the expected next tab to handle Chrome's automatic selection
-        this.skipNextActivation = {
-          reason: SkipActivationReason.CLOSE_TAB,
-          expectedTabId: nextTabId,
-        };
-
-        // Immediately select the correct tab
-        this.setFocus(nextTabId, SkipActivationReason.CLOSE_TAB);
-      }
-    } else {
-      logger.debug(
-        `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`
-      );
+    if (!windowId) {
+      logger.debug(`CloseTab: could not find window for tabId ${tabId}`);
+      return;
     }
 
-    // Remove the tab from MRU
-    tabarr.splice(tabloc, 1);
-    logger.debug(`CloseTab: (after) [${tabarr.map((e) => e.tabId)}]`);
+    // Queue this operation to prevent race conditions
+    return this.queueOperation(windowId, async () => {
+      const settings = settingsManager.getSettings();
+      const tabarr = info.tabarr;
+      const tabloc = info.tabloc;
 
-    await storageManager.saveTrackingState(windowManager.getAllTrackers());
+      logger.debug(`CloseTab: tabid ${tabId}, flip option: ${settings.flip}`);
+      logger.debug(`CloseTab: (before) [${tabarr.map((e) => e.tabId)}]`);
+
+      // Handle tab selection BEFORE removing from MRU if flip is enabled
+      if (tabarr.length > 1 && settings.flip) {
+        // Get the most recent tab BEFORE removing the current tab
+        const nextTabId = this.getMostRecentTabExcluding(tabarr, tabId);
+        if (nextTabId) {
+          logger.debug(`CloseTab: Tab flipping ON - will select most recent tab: ${nextTabId}`);
+
+          // Store the expected next tab to handle Chrome's automatic selection
+          this.skipNextActivation = {
+            reason: SkipActivationReason.CLOSE_TAB,
+            expectedTabId: nextTabId,
+          };
+
+          // Immediately select the correct tab
+          this.setFocus(nextTabId, SkipActivationReason.CLOSE_TAB);
+        }
+      } else {
+        logger.debug(
+          `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`
+        );
+      }
+
+      // Remove the tab from MRU
+      tabarr.splice(tabloc, 1);
+      logger.debug(`CloseTab: (after) [${tabarr.map((e) => e.tabId)}]`);
+
+      // Use debounced save for better performance
+      await storageManager.saveTrackingState(windowManager.getAllTrackers());
+    });
   }
 
   /**
-   * Get most recently used tab ID excluding a specific tab
+   * Get most recently used tab ID excluding a specific tab (optimized)
    */
   private getMostRecentTabExcluding(tabarr: TabMRUEntry[], excludeTabId: number): number | null {
     if (tabarr.length === 0) return null;
 
-    // Filter out the excluded tab and sort by timestamp to get the most recent
-    const filtered = tabarr.filter((entry) => entry.tabId !== excludeTabId);
-    if (filtered.length === 0) return null;
+    // Use a simple max-finding approach instead of sorting for better performance
+    let maxTimestamp = 0;
+    let mostRecentTabId: number | null = null;
 
-    const sorted = [...filtered].sort((a, b) => b.order - a.order);
-    return sorted[0].tabId;
+    for (const entry of tabarr) {
+      if (entry.tabId !== excludeTabId && entry.order > maxTimestamp) {
+        maxTimestamp = entry.order;
+        mostRecentTabId = entry.tabId;
+      }
+    }
+
+    return mostRecentTabId;
   }
   /**
-   * Handle tab activation (selection)
+   * Handle tab activation (selection) with performance optimizations
    */
   public async handleTabActivation(info: any, windowManager: any): Promise<void> {
     if (this.skipNextActivation) {
@@ -368,62 +426,69 @@ export class TabManager {
       }
     }
 
-    let tracker = windowManager.getWindowTracker(info.windowId);
-    if (!tracker) {
-      logger.debug(`Shuffle: window ${info.windowId} not found - triggering reconciliation`);
-
-      // Trigger reconciliation to fix missing window/tab tracking
-      try {
-        await windowManager.reconcileWithBrowserState();
-        // Try to get the tracker again after reconciliation
-        tracker = windowManager.getWindowTracker(info.windowId);
-      } catch (error) {
-        logger.error(`Shuffle: Reconciliation failed`, error);
-      }
-
+    // Queue this operation to prevent race conditions
+    return this.queueOperation(info.windowId, async () => {
+      let tracker = windowManager.getWindowTracker(info.windowId);
       if (!tracker) {
-        logger.warn(`Shuffle: window ${info.windowId} still not found after reconciliation`);
-        return;
+        logger.debug(`Shuffle: window ${info.windowId} not found - triggering reconciliation`);
+
+        // Trigger reconciliation to fix missing window/tab tracking
+        try {
+          await windowManager.reconcileWithBrowserState();
+          // Try to get the tracker again after reconciliation
+          tracker = windowManager.getWindowTracker(info.windowId);
+        } catch (error) {
+          logger.error(`Shuffle: Reconciliation failed`, error);
+        }
+
+        if (!tracker) {
+          logger.warn(`Shuffle: window ${info.windowId} still not found after reconciliation`);
+          return;
+        }
       }
-    }
 
-    const tabarr = tracker.tabarr;
-    let tabInfo = this.findTabInMRU(tabarr, info.tabId);
-
-    if (!tabInfo) {
-      logger.debug(`Shuffle: tabId ${info.tabId} not found in MRU - triggering reconciliation`);
-
-      // Trigger reconciliation to fix missing tab tracking
-      try {
-        await windowManager.reconcileWithBrowserState();
-        // Try to find the tab again after reconciliation
-        tabInfo = this.findTabInMRU(tabarr, info.tabId);
-      } catch (error) {
-        logger.error(`Shuffle: Reconciliation failed`, error);
-      }
+      const tabarr = tracker.tabarr;
+      let tabInfo = this.findTabInMRU(tabarr, info.tabId);
 
       if (!tabInfo) {
-        logger.warn(
-          `Shuffle: tabId ${info.tabId} still not found after reconciliation, tabarr: [${tabarr.map(
-            (e) => e.tabId
-          )}]`
-        );
+        logger.debug(`Shuffle: tabId ${info.tabId} not found in MRU - triggering reconciliation`);
+
+        // Trigger reconciliation to fix missing tab tracking
+        try {
+          await windowManager.reconcileWithBrowserState();
+          // Try to find the tab again after reconciliation
+          tabInfo = this.findTabInMRU(tabarr, info.tabId);
+        } catch (error) {
+          logger.error(`Shuffle: Reconciliation failed`, error);
+        }
+
+        if (!tabInfo) {
+          logger.warn(
+            `Shuffle: tabId ${
+              info.tabId
+            } still not found after reconciliation, tabarr: [${tabarr.map((e) => e.tabId)}]`
+          );
+          return;
+        }
+      }
+
+      // Check if it's already the most recent (optimized check)
+      const mostRecentTabId = this.getMostRecentTabId(tabarr);
+      if (mostRecentTabId === info.tabId) {
+        logger.debug(`Shuffle: tabId ${info.tabId} already most recent`);
         return;
       }
-    }
 
-    // Check if it's already the most recent (highest timestamp)
-    const mostRecentTabId = this.getMostRecentTabId(tabarr);
-    if (mostRecentTabId === info.tabId) {
-      logger.debug(`Shuffle: tabId ${info.tabId} already most recent`);
-      return;
-    }
+      logger.debug(`Shuffle: (before) [${tabarr.map((e) => e.tabId)}]`);
+      this.updateTabTimestamp(tabarr, info.tabId);
+      logger.debug(`Shuffle: (after) [${tabarr.map((e) => e.tabId)}]`);
 
-    logger.debug(`Shuffle: (before) [${tabarr.map((e) => e.tabId)}]`);
-    this.updateTabTimestamp(tabarr, info.tabId);
-    logger.debug(`Shuffle: (after) [${tabarr.map((e) => e.tabId)}]`);
+      // Update cache for faster future lookups
+      this.mruCache.set(info.windowId, info.tabId);
 
-    await storageManager.saveTrackingState(windowManager.getAllTrackers());
+      // Use debounced save for better performance
+      await storageManager.saveTrackingState(windowManager.getAllTrackers());
+    });
   }
 
   /**

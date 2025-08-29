@@ -10,8 +10,9 @@ export class ServiceWorkerManager {
   private reconciliationCallback: (() => Promise<void>) | null = null;
   private readonly PING_MESSAGE_TYPE = "flst-ping";
   private readonly PONG_MESSAGE_TYPE = "flst-pong";
-  private readonly REACTIVATION_CHECK_INTERVAL = 5000; // 5 seconds
+  private readonly REACTIVATION_CHECK_INTERVAL = 15000; // 15 seconds (optimized for performance)
   private reactivationCheckTimer: number | null = null;
+  private lastPingTime: number = 0;
 
   private constructor() {}
 
@@ -49,11 +50,17 @@ export class ServiceWorkerManager {
     });
 
     // Handle service worker suspension
-    chrome.runtime.onSuspend.addListener(() => {
+    chrome.runtime.onSuspend.addListener(async () => {
       logger.debug("Service worker suspending - persisting state");
       this.isActive = false;
       this.stopReactivationMonitoring();
-      // State will be saved automatically by the last operation
+
+      // Force immediate save of any pending state before suspension
+      try {
+        await storageManager.flushTrackingState();
+      } catch (error) {
+        logger.error("Error flushing state during suspension", error);
+      }
     });
 
     // Handle service worker suspend cancellation
@@ -88,8 +95,8 @@ export class ServiceWorkerManager {
     // Restart reactivation monitoring if it was stopped
     this.startReactivationMonitoring();
 
-    // If more than 5 seconds have passed since last activation, trigger reconciliation
-    if (timeSinceLastActivation > 5000) {
+    // If more than 10 seconds have passed since last activation, trigger reconciliation
+    if (timeSinceLastActivation > 10000) {
       logger.debug(
         `Service worker reactivated after ${timeSinceLastActivation}ms - triggering reconciliation`
       );
@@ -103,7 +110,7 @@ export class ServiceWorkerManager {
             logger.error("Error during reconciliation after reactivation", error);
           }
         }
-      }, 100);
+      }, 250); // Increased delay for slower machines
     }
   }
 
@@ -124,8 +131,11 @@ export class ServiceWorkerManager {
 
         // Check if this ping indicates a reactivation
         const timeSinceLastActivation = Date.now() - this.lastActivationTime;
-        if (timeSinceLastActivation > 5000) {
-          this.handleReactivation();
+        if (timeSinceLastActivation > 10000) {
+          // Throttle reactivation handling
+          if (Date.now() - this.lastActivationTime > 15000) {
+            this.handleReactivation();
+          }
         }
 
         return true; // Keep message channel open for async response
@@ -143,13 +153,26 @@ export class ServiceWorkerManager {
     // Set up periodic self-ping to detect reactivation
     this.reactivationCheckTimer = setInterval(async () => {
       try {
-        const pingStartTime = Date.now();
+        const now = Date.now();
+
+        // Rate limit pings to avoid excessive processing
+        if (now - this.lastPingTime < 10000) {
+          return;
+        }
+
+        this.lastPingTime = now;
+        const pingStartTime = now;
 
         // Send ping to ourselves to test if service worker is responsive
         const response = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("Ping timeout"));
+          }, 3000); // 3 second timeout for slower machines
+
           chrome.runtime.sendMessage(
             { type: this.PING_MESSAGE_TYPE, timestamp: pingStartTime },
             (response) => {
+              clearTimeout(timeout);
               if (chrome.runtime.lastError) {
                 reject(chrome.runtime.lastError);
               } else {
@@ -168,8 +191,11 @@ export class ServiceWorkerManager {
         // If ping fails, it might indicate service worker was dormant
         logger.debug("Self-ping failed - service worker may have been dormant");
 
-        // Trigger reactivation handling
-        await this.handleReactivation();
+        // Throttle reactivation handling to avoid excessive processing
+        const timeSinceLastReactivation = Date.now() - this.lastActivationTime;
+        if (timeSinceLastReactivation > 15000) {
+          await this.handleReactivation();
+        }
       }
     }, this.REACTIVATION_CHECK_INTERVAL);
 
