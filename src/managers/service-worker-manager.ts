@@ -1,4 +1,6 @@
 // Service Worker Manager for FLST Chrome extension
+// Uses chrome.alarms API for keepalive (persists across service worker restarts)
+// Event listeners are registered synchronously in background.ts
 
 import { logger } from "../utils/logger.js";
 import { storageManager } from "./storage-manager.js";
@@ -8,11 +10,8 @@ export class ServiceWorkerManager {
   private isActive: boolean = false;
   private lastActivationTime: number = 0;
   private reconciliationCallback: (() => Promise<void>) | null = null;
-  private readonly PING_MESSAGE_TYPE = "flst-ping";
-  private readonly PONG_MESSAGE_TYPE = "flst-pong";
-  private readonly REACTIVATION_CHECK_INTERVAL = 15000; // 15 seconds (optimized for performance)
-  private reactivationCheckTimer: number | null = null;
-  private lastPingTime: number = 0;
+  private static readonly KEEPALIVE_ALARM_NAME = "flst-keepalive";
+  private static readonly KEEPALIVE_PERIOD_MINUTES = 0.5; // 30 seconds (minimum for chrome.alarms)
 
   private constructor() {}
 
@@ -31,187 +30,101 @@ export class ServiceWorkerManager {
   }
 
   /**
-   * Initialize service worker lifecycle handlers
+   * Start the keepalive alarm (replaces setInterval which doesn't survive service worker restarts)
    */
-  public initializeLifecycleHandlers(): void {
+  public async startKeepalive(): Promise<void> {
     this.isActive = true;
     this.lastActivationTime = Date.now();
 
-    // Set up message listener for ping/pong reactivation detection
-    this.setupMessageListener();
-
-    // Start periodic reactivation checking
-    this.startReactivationMonitoring();
-
-    // Handle service worker startup
-    chrome.runtime.onStartup.addListener(async () => {
-      logger.debug("Service worker started");
-      await this.handleReactivation();
+    chrome.alarms.create(ServiceWorkerManager.KEEPALIVE_ALARM_NAME, {
+      periodInMinutes: ServiceWorkerManager.KEEPALIVE_PERIOD_MINUTES,
     });
 
-    // Handle service worker suspension
-    chrome.runtime.onSuspend.addListener(async () => {
-      logger.debug("Service worker suspending - persisting state");
-      this.isActive = false;
-      this.stopReactivationMonitoring();
-
-      // Force immediate save of any pending state before suspension
-      try {
-        await storageManager.flushTrackingState();
-      } catch (error) {
-        logger.error("Error flushing state during suspension", error);
-      }
-    });
-
-    // Handle service worker suspend cancellation
-    chrome.runtime.onSuspendCanceled.addListener(async () => {
-      logger.debug("Service worker suspend canceled");
-      await this.handleReactivation();
-    });
-
-    // Handle extension installation/update
-    chrome.runtime.onInstalled.addListener(async (details) => {
-      logger.debug(`Extension ${details.reason}`);
-
-      // Clear old state on fresh install
-      if (details.reason === "install") {
-        await storageManager.clearTrackingState();
-      }
-
-      await this.handleReactivation();
-    });
+    logger.debug(
+      `Keepalive alarm created with ${ServiceWorkerManager.KEEPALIVE_PERIOD_MINUTES * 60}s period`,
+    );
   }
 
   /**
-   * Handle service worker reactivation
+   * Handle keepalive alarm firing - called from background.ts
    */
-  private async handleReactivation(): Promise<void> {
+  public async handleKeepaliveAlarm(): Promise<void> {
+    const now = Date.now();
+    const timeSinceLastActivation = now - this.lastActivationTime;
+
+    this.lastActivationTime = now;
+    this.isActive = true;
+
+    // If significantly more time passed than the alarm period, the service worker was likely dormant
+    if (timeSinceLastActivation > 35000) {
+      logger.debug(
+        `Keepalive detected dormancy: ${timeSinceLastActivation}ms since last activation - triggering reconciliation`,
+      );
+      await this.triggerReconciliation();
+    } else {
+      logger.debug(`Keepalive: service worker active (${timeSinceLastActivation}ms since last)`);
+    }
+  }
+
+  /**
+   * Handle service worker startup event - called from background.ts
+   */
+  public async handleReactivation(): Promise<void> {
     const now = Date.now();
     const timeSinceLastActivation = now - this.lastActivationTime;
 
     this.isActive = true;
     this.lastActivationTime = now;
 
-    // Restart reactivation monitoring if it was stopped
-    this.startReactivationMonitoring();
+    // Ensure keepalive alarm is running
+    const existingAlarm = await chrome.alarms.get(ServiceWorkerManager.KEEPALIVE_ALARM_NAME);
+    if (!existingAlarm) {
+      await this.startKeepalive();
+    }
 
-    // If more than 10 seconds have passed since last activation, trigger reconciliation
     if (timeSinceLastActivation > 10000) {
       logger.debug(
-        `Service worker reactivated after ${timeSinceLastActivation}ms - triggering reconciliation`
+        `Service worker reactivated after ${timeSinceLastActivation}ms - triggering reconciliation`,
       );
-
-      // Small delay to allow any pending operations to complete
-      setTimeout(async () => {
-        if (this.reconciliationCallback) {
-          try {
-            await this.reconciliationCallback();
-          } catch (error) {
-            logger.error("Error during reconciliation after reactivation", error);
-          }
-        }
-      }, 250); // Increased delay for slower machines
+      await this.triggerReconciliation();
     }
   }
 
   /**
-   * Setup message listener for ping/pong reactivation detection
+   * Handle service worker suspension - called from background.ts
+   * Must be fast - Chrome gives limited time before suspending
    */
-  private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.type === this.PING_MESSAGE_TYPE) {
-        logger.debug("Ping received - service worker is active");
-
-        // Update last activation time
-        this.lastActivationTime = Date.now();
-        this.isActive = true;
-
-        // Send pong response
-        sendResponse({ type: this.PONG_MESSAGE_TYPE, timestamp: Date.now() });
-
-        // Check if this ping indicates a reactivation
-        const timeSinceLastActivation = Date.now() - this.lastActivationTime;
-        if (timeSinceLastActivation > 10000) {
-          // Throttle reactivation handling
-          if (Date.now() - this.lastActivationTime > 15000) {
-            this.handleReactivation();
-          }
-        }
-
-        return true; // Keep message channel open for async response
-      }
+  public handleSuspend(): void {
+    this.isActive = false;
+    // Force immediate save of any pending state before suspension
+    storageManager.flushTrackingState().catch((error) => {
+      logger.error("Error flushing state during suspension", error);
     });
   }
 
   /**
-   * Start periodic reactivation monitoring
+   * Handle suspension cancellation - called from background.ts
    */
-  private startReactivationMonitoring(): void {
-    // Clear any existing timer
-    this.stopReactivationMonitoring();
-
-    // Set up periodic self-ping to detect reactivation
-    this.reactivationCheckTimer = setInterval(async () => {
-      try {
-        const now = Date.now();
-
-        // Rate limit pings to avoid excessive processing
-        if (now - this.lastPingTime < 10000) {
-          return;
-        }
-
-        this.lastPingTime = now;
-        const pingStartTime = now;
-
-        // Send ping to ourselves to test if service worker is responsive
-        const response = await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error("Ping timeout"));
-          }, 3000); // 3 second timeout for slower machines
-
-          chrome.runtime.sendMessage(
-            { type: this.PING_MESSAGE_TYPE, timestamp: pingStartTime },
-            (response) => {
-              clearTimeout(timeout);
-              if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-              } else {
-                resolve(response);
-              }
-            }
-          );
-        });
-
-        // If we got a response, update activation time
-        if (response && typeof response === "object" && "type" in response) {
-          this.lastActivationTime = Date.now();
-          this.isActive = true;
-        }
-      } catch (error) {
-        // If ping fails, it might indicate service worker was dormant
-        logger.debug("Self-ping failed - service worker may have been dormant");
-
-        // Throttle reactivation handling to avoid excessive processing
-        const timeSinceLastReactivation = Date.now() - this.lastActivationTime;
-        if (timeSinceLastReactivation > 15000) {
-          await this.handleReactivation();
-        }
-      }
-    }, this.REACTIVATION_CHECK_INTERVAL);
-
-    logger.debug(
-      `Reactivation monitoring started with ${this.REACTIVATION_CHECK_INTERVAL}ms interval`
-    );
+  public async handleSuspendCanceled(): Promise<void> {
+    this.isActive = true;
+    this.lastActivationTime = Date.now();
+    logger.debug("Suspend canceled - triggering reconciliation");
+    await this.triggerReconciliation();
   }
 
   /**
-   * Stop reactivation monitoring
+   * Trigger reconciliation with browser state
    */
-  private stopReactivationMonitoring(): void {
-    if (this.reactivationCheckTimer) {
-      clearInterval(this.reactivationCheckTimer);
-      this.reactivationCheckTimer = null;
-      logger.debug("Reactivation monitoring stopped");
+  private async triggerReconciliation(): Promise<void> {
+    if (!this.reconciliationCallback) return;
+
+    // Small delay to allow any pending operations to complete
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    try {
+      await this.reconciliationCallback();
+    } catch (error) {
+      logger.error("Error during reconciliation after reactivation", error);
     }
   }
 
@@ -231,15 +144,6 @@ export class ServiceWorkerManager {
       timestamp: Date.now(),
       lastActivation: this.lastActivationTime,
     };
-  }
-
-  /**
-   * Stop reactivation monitoring (for cleanup)
-   */
-  public stopMonitoring(): Promise<void> {
-    this.stopReactivationMonitoring();
-    logger.debug("Service worker monitoring stopped");
-    return Promise.resolve();
   }
 }
 

@@ -17,6 +17,11 @@ export class TabManager {
   private skipNextActivation: SkipActivationInfo | null = null;
   private mruCache: Map<number, number> = new Map(); // Cache for MRU lookups (windowId -> lastTabId)
   private operationQueue: Map<number, Promise<void>> = new Map(); // Prevent concurrent operations per window
+  // Track last close operation for resilient post-close activation handling
+  private lastCloseInfo: { windowId: number; expectedTabId: number; timestamp: number } | null =
+    null;
+  // Track the last known active tab per window to detect when Chrome already activated the expected tab
+  private lastKnownActiveTabIds: Map<number, number> = new Map();
 
   private constructor() {}
 
@@ -55,7 +60,7 @@ export class TabManager {
   private addTabToMRU(
     tabarr: TabMRUEntry[],
     tabId: number,
-    position: "first" | "last" = "last"
+    position: "first" | "last" = "last",
   ): void {
     const order = Date.now();
     const entry: TabMRUEntry = { tabId, order };
@@ -114,7 +119,7 @@ export class TabManager {
    */
   private findTabInMRU(
     tabarr: TabMRUEntry[],
-    tabId: number
+    tabId: number,
   ): { entry: TabMRUEntry; index: number } | null {
     const index = tabarr.findIndex((entry) => entry.tabId === tabId);
     if (index === -1) return null;
@@ -128,7 +133,7 @@ export class TabManager {
     tabId: number,
     moveProperties: any,
     callback?: SafeTabMoveCallback,
-    retryCount: number = 0
+    retryCount: number = 0,
   ): void {
     const maxRetries = 3;
     const retryDelay = 200;
@@ -141,7 +146,7 @@ export class TabManager {
           logger.debug(
             `Tab move failed (user dragging), retrying in ${retryDelay}ms (attempt ${
               retryCount + 1
-            }/${maxRetries})`
+            }/${maxRetries})`,
           );
           setTimeout(() => {
             this.safeTabMove(tabId, moveProperties, callback, retryCount + 1);
@@ -180,7 +185,7 @@ export class TabManager {
           logger.debug(
             `Tab update failed (user dragging), retrying in ${retryDelay}ms (attempt ${
               retryCount + 1
-            }/${maxRetries})`
+            }/${maxRetries})`,
           );
           setTimeout(() => {
             this.safeTabUpdate(tabId, updateProperties, retryCount + 1);
@@ -191,8 +196,11 @@ export class TabManager {
         // If it's still a dragging error after all retries, just log as debug instead of error
         if (errorMsg?.includes("user may be dragging")) {
           logger.debug(
-            `Tab update abandoned after ${maxRetries} retries - user still dragging tab ${tabId}`
+            `Tab update abandoned after ${maxRetries} retries - user still dragging tab ${tabId}`,
           );
+        } else if (errorMsg?.includes("No tab with id")) {
+          // Tab was closed before the update completed - expected race condition
+          logger.debug(`Tab ${tabId} no longer exists, update skipped`);
         } else {
           // Log other errors normally
           logger.error(`Tab update failed: ${errorMsg}`);
@@ -219,7 +227,7 @@ export class TabManager {
       let tracker = windowManager.getWindowTracker(tabObj.windowId);
       if (!tracker) {
         logger.debug(
-          `${logPrefix}Window ${tabObj.windowId} not found in tracking - triggering reconciliation`
+          `${logPrefix}Window ${tabObj.windowId} not found in tracking - triggering reconciliation`,
         );
 
         // Trigger reconciliation to fix missing window/tab tracking
@@ -239,7 +247,7 @@ export class TabManager {
 
       const settings = settingsManager.getSettings();
       logger.debug(
-        `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}`
+        `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}`,
       );
 
       // Handle tab relocation
@@ -300,7 +308,7 @@ export class TabManager {
                 logger.error(`${logPrefix}Move failed after retries: ${error}`);
               } else {
                 logger.debug(
-                  `${logPrefix}Tab ${tabObj.id} moved to far right (was at index ${tabIndex})`
+                  `${logPrefix}Tab ${tabObj.id} moved to far right (was at index ${tabIndex})`,
                 );
               }
               resolve();
@@ -350,20 +358,41 @@ export class TabManager {
         // Get the most recent tab BEFORE removing the current tab
         const nextTabId = this.getMostRecentTabExcluding(tabarr, tabId);
         if (nextTabId) {
-          logger.debug(`CloseTab: Tab flipping ON - will select most recent tab: ${nextTabId}`);
+          // Check if Chrome already activated the expected tab (race condition:
+          // when create+close happens fast, handleTabClose runs AFTER Chrome's
+          // default activation. If the expected tab is already active, Chrome
+          // won't fire another onActivated, leaving skipNextActivation unconsumed
+          // and causing a false "correction" on the user's next tab switch).
+          const currentActiveTabId = this.lastKnownActiveTabIds.get(windowId);
+          if (currentActiveTabId === nextTabId) {
+            logger.debug(
+              `CloseTab: Expected tab ${nextTabId} is already active - no correction needed`,
+            );
+          } else {
+            logger.debug(`CloseTab: Tab flipping ON - will select most recent tab: ${nextTabId}`);
 
-          // Store the expected next tab to handle Chrome's automatic selection
-          this.skipNextActivation = {
-            reason: SkipActivationReason.CLOSE_TAB,
-            expectedTabId: nextTabId,
-          };
+            // Set skip info with expectedTabId
+            // IMPORTANT: Do NOT use setFocus() here - it overwrites skipNextActivation
+            // and loses the expectedTabId needed for activation correction
+            this.skipNextActivation = {
+              reason: SkipActivationReason.CLOSE_TAB,
+              expectedTabId: nextTabId,
+            };
 
-          // Immediately select the correct tab
-          this.setFocus(nextTabId, SkipActivationReason.CLOSE_TAB);
+            // Track close operation as backup for post-dormancy recovery
+            this.lastCloseInfo = {
+              windowId,
+              expectedTabId: nextTabId,
+              timestamp: Date.now(),
+            };
+
+            // Directly activate the MRU tab (bypassing setFocus to preserve skipNextActivation)
+            this.safeTabUpdate(nextTabId, { active: true });
+          }
         }
       } else {
         logger.debug(
-          `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`
+          `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`,
         );
       }
 
@@ -371,8 +400,8 @@ export class TabManager {
       tabarr.splice(tabloc, 1);
       logger.debug(`CloseTab: (after) [${tabarr.map((e) => e.tabId)}]`);
 
-      // Use debounced save for better performance
-      await storageManager.saveTrackingState(windowManager.getAllTrackers());
+      // Save immediately for close operations (critical for state preservation during dormancy)
+      await storageManager.saveTrackingState(windowManager.getAllTrackers(), true);
     });
   }
 
@@ -399,30 +428,59 @@ export class TabManager {
    * Handle tab activation (selection) with performance optimizations
    */
   public async handleTabActivation(info: any, windowManager: any): Promise<void> {
+    // Always record the active tab per window (before skip checking)
+    // This allows handleTabClose to detect when Chrome already activated the expected tab
+    if (info.windowId && info.tabId) {
+      this.lastKnownActiveTabIds.set(info.windowId, info.tabId);
+    }
+
     if (this.skipNextActivation) {
       const skipInfo = this.skipNextActivation;
       logger.debug(`Shuffle: skip => ${skipInfo.reason}`);
+
+      // Always clear lastCloseInfo when consuming skipNextActivation to prevent
+      // the fallback from incorrectly "correcting" subsequent user-initiated activations
+      this.skipNextActivation = null;
+      this.lastCloseInfo = null;
 
       // Check if this is the expected tab from a close operation
       if (skipInfo.reason === SkipActivationReason.CLOSE_TAB && skipInfo.expectedTabId) {
         if (skipInfo.expectedTabId === info.tabId) {
           logger.debug(
-            `Shuffle: Expected tab ${skipInfo.expectedTabId} activated after close - allowing`
+            `Shuffle: Expected tab ${skipInfo.expectedTabId} activated after close - allowing`,
           );
-          this.skipNextActivation = null;
           // Don't return - let it update the timestamp normally
         } else {
           logger.debug(
-            `Shuffle: Unexpected tab ${info.tabId} activated, expected ${skipInfo.expectedTabId} - correcting`
+            `Shuffle: Unexpected tab ${info.tabId} activated, expected ${skipInfo.expectedTabId} - correcting`,
           );
-          this.skipNextActivation = null;
           // Try to select the correct tab again
           this.setFocus(skipInfo.expectedTabId, SkipActivationReason.CLOSE_TAB_CORRECTION);
           return;
         }
       } else {
-        this.skipNextActivation = null;
         return;
+      }
+    } else if (this.lastCloseInfo) {
+      // Fallback: skipNextActivation was lost (e.g., timing edge case after dormancy)
+      // but we know a close just happened. Check if the activation should be corrected.
+      const closeInfo = this.lastCloseInfo;
+      const elapsed = Date.now() - closeInfo.timestamp;
+
+      if (elapsed < 2000 && closeInfo.windowId === info.windowId) {
+        logger.debug(
+          `Shuffle: skipNextActivation was null but close detected ${elapsed}ms ago - correcting to tab ${closeInfo.expectedTabId}`,
+        );
+        this.lastCloseInfo = null;
+
+        if (closeInfo.expectedTabId !== info.tabId) {
+          this.setFocus(closeInfo.expectedTabId, SkipActivationReason.CLOSE_TAB_CORRECTION);
+          return;
+        }
+        // If it's already the expected tab, fall through to update MRU
+      } else {
+        // Too old or different window, clear it
+        this.lastCloseInfo = null;
       }
     }
 
@@ -466,7 +524,7 @@ export class TabManager {
           logger.warn(
             `Shuffle: tabId ${
               info.tabId
-            } still not found after reconciliation, tabarr: [${tabarr.map((e) => e.tabId)}]`
+            } still not found after reconciliation, tabarr: [${tabarr.map((e) => e.tabId)}]`,
           );
           return;
         }
@@ -527,7 +585,7 @@ export class TabManager {
     if (tracker.tabarr.length > 0) {
       const lastTabId = this.getMostRecentTabId(tracker.tabarr);
       logger.debug(
-        `TabDetached: ${tabId} from window ${detachInfo.oldWindowId}, last tab: ${lastTabId}`
+        `TabDetached: ${tabId} from window ${detachInfo.oldWindowId}, last tab: ${lastTabId}`,
       );
       if (lastTabId) {
         this.setFocus(lastTabId, SkipActivationReason.DETACH);

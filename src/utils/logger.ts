@@ -28,7 +28,11 @@ export class Logger {
   }
 
   public error(message: string, error?: any): void {
-    console.error(`[FLST ERROR] ${message}`, error);
+    if (error !== undefined) {
+      console.error(`[FLST ERROR] ${message}`, error);
+    } else {
+      console.error(`[FLST ERROR] ${message}`);
+    }
   }
 
   public warn(message: string): void {

@@ -96,7 +96,7 @@ export class StorageManager {
    */
   public async saveTrackingState(
     trackingState: TabTracker[],
-    immediate: boolean = false
+    immediate: boolean = false,
   ): Promise<void> {
     // Store the latest state
     this.pendingTrackingState = trackingState;
@@ -127,7 +127,7 @@ export class StorageManager {
       const stateData = {
         trackingState: this.pendingTrackingState,
         timestamp: Date.now(),
-        version: "3.2.0",
+        version: "3.3.0",
       };
 
       await this.setSetting("flstState", stateData);
@@ -173,8 +173,8 @@ export class StorageManager {
 
       logger.debug(
         `Loaded tracking state: ${stateData.trackingState.length} windows, age: ${Math.round(
-          age / 1000
-        )}s`
+          age / 1000,
+        )}s`,
       );
       return stateData.trackingState;
     } catch (error) {

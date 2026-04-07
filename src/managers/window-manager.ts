@@ -44,6 +44,12 @@ export class WindowManager {
           if (restoredState && this.validateRestoredState(windows, restoredState)) {
             logger.debug("Successfully restored tracking state from storage");
             this.trackers = restoredState;
+          } else if (restoredState && restoredState.length > 0) {
+            // Partial match - use restored state as base and reconcile with actual browser state
+            logger.debug("Partial state match - restoring and reconciling");
+            this.trackers = restoredState;
+            // reconcileWithBrowserState will add missing tabs and remove orphaned ones
+            await this.reconcileWithBrowserState();
           } else {
             logger.debug("Building fresh tracking state from current browser state");
             this.setTracking(windows);
@@ -93,17 +99,17 @@ export class WindowManager {
       }
 
       // Check if tabs still exist
-      const currentTabIds = currentWindow.tabs.map((t: any) => t.id).sort();
-      const trackedTabIds = tracker.tabarr.slice().sort();
+      const currentTabIds = new Set(currentWindow.tabs.map((t: any) => t.id));
+      const trackedTabIds = tracker.tabarr.map((entry) => entry.tabId);
 
-      if (currentTabIds.length !== trackedTabIds.length) {
+      if (currentTabIds.size !== trackedTabIds.length) {
         logger.debug(`Tab count mismatch for window ${tracker.wid}`);
         return false;
       }
 
-      // Check if all tabs still exist
+      // Check if all tracked tabs still exist in browser
       for (const tabId of trackedTabIds) {
-        if (!currentTabIds.includes(tabId)) {
+        if (!currentTabIds.has(tabId)) {
           logger.debug(`Tab ${tabId} no longer exists in window ${tracker.wid}`);
           return false;
         }
@@ -138,7 +144,7 @@ export class WindowManager {
     const tracker: TabTracker = {
       tabarr: [],
       wid: windowObj.id,
-      moveok: windowObj.type === "normal",
+      moveok: windowObj.type === "normal" || windowObj.type === "popup",
     };
 
     if (!windowObj.tabs || !Array.isArray(windowObj.tabs)) {
@@ -166,8 +172,8 @@ export class WindowManager {
     this.trackers.push(tracker);
     logger.debug(
       `AddWindow: Window ${windowObj.id}, selected tab ${selectedId}, tabs: [${tracker.tabarr.map(
-        (e) => e.tabId
-      )}]`
+        (e) => e.tabId,
+      )}]`,
     );
 
     // Save state after adding window
@@ -315,7 +321,7 @@ export class WindowManager {
                 if (!window || !window.id || !window.tabs) return;
 
                 reconciliationChanges += await this.reconcileWindow(window);
-              })
+              }),
             );
 
             // Add small delay between batches to prevent blocking
@@ -327,13 +333,13 @@ export class WindowManager {
           // Remove trackers for windows that no longer exist
           const currentWindowIds = windows.map((w) => w.id);
           const orphanedTrackers = this.trackers.filter(
-            (tracker) => !currentWindowIds.includes(tracker.wid)
+            (tracker) => !currentWindowIds.includes(tracker.wid),
           );
 
           if (orphanedTrackers.length > 0) {
             logger.debug(`Found ${orphanedTrackers.length} orphaned window trackers`);
             this.trackers = this.trackers.filter((tracker) =>
-              currentWindowIds.includes(tracker.wid)
+              currentWindowIds.includes(tracker.wid),
             );
             reconciliationChanges += orphanedTrackers.length;
           }
@@ -342,12 +348,12 @@ export class WindowManager {
             logger.debug(
               `Reconciliation completed with ${reconciliationChanges} changes in ${
                 Date.now() - startTime
-              }ms`
+              }ms`,
             );
             await storageManager.saveTrackingState(this.trackers, true); // Immediate save for reconciliation
           } else {
             logger.debug(
-              `Reconciliation completed - no changes needed (${Date.now() - startTime}ms)`
+              `Reconciliation completed - no changes needed (${Date.now() - startTime}ms)`,
             );
           }
         } catch (error) {
@@ -383,8 +389,8 @@ export class WindowManager {
     if (missingTabs.length > 0) {
       logger.debug(
         `Found ${missingTabs.length} missing tabs in window ${window.id}: [${missingTabs.join(
-          ", "
-        )}]`
+          ", ",
+        )}]`,
       );
 
       // Add missing tabs to MRU with current timestamp
@@ -413,8 +419,8 @@ export class WindowManager {
     if (orphanedTabs.length > 0) {
       logger.debug(
         `Found ${orphanedTabs.length} orphaned tabs in window ${window.id}: [${orphanedTabs.join(
-          ", "
-        )}]`
+          ", ",
+        )}]`,
       );
 
       // Remove orphaned tabs (use filter for better performance than splice)
