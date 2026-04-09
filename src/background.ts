@@ -1,5 +1,5 @@
 //
-// FLST Chrome <<>> Focus Last Selected Tab <<>> Rev 3.3.0
+// FLST Chrome <<>> Focus Last Selected Tab <<>> Rev 3.3.1
 //
 // FLST provides natural / MRU tab ordering, plus Options for
 // Tab-Flipping, New-Tab-Select, and New-Tab-Location.

@@ -247,18 +247,29 @@ export class TabManager {
 
       const settings = settingsManager.getSettings();
       logger.debug(
-        `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}`,
+        `${logPrefix}windowId ${tabObj.windowId}, id ${tabObj.id}, reloc: ${settings.reloc}, ntsel: ${settings.ntsel}, ntord: ${settings.ntord}`,
       );
 
-      // Handle tab relocation
-      if (settings.reloc && tracker.moveok && tabObj.id) {
-        await this.relocateTabToFarRight(tabObj, logPrefix);
+      // Check if tab is already in MRU (restored tab from browser startup)
+      const existingIndex = tabObj.id
+        ? tracker.tabarr.findIndex((entry) => entry.tabId === tabObj.id)
+        : -1;
+
+      // Handle tab relocation / sibling ordering (skip for restored tabs)
+      if (tabObj.id && tracker.moveok && existingIndex === -1) {
+        if (settings.ntord && tabObj.openerTabId) {
+          // Reverse sibling order: place new tab right after its opener
+          await this.relocateAfterOpener(tabObj, logPrefix);
+        } else if (settings.reloc) {
+          // Standard relocation: move to far right
+          await this.relocateTabToFarRight(tabObj, logPrefix);
+        }
+      } else if (existingIndex !== -1) {
+        logger.debug(`${logPrefix}Tab already tracked (restored), skipping relocation`);
       }
 
       // Handle new tab selection and tracking based on ntsel option
       if (tabObj.id) {
-        // Check if tab is already in MRU (in case reconciliation added it)
-        const existingIndex = tracker.tabarr.findIndex((entry) => entry.tabId === tabObj.id);
         if (existingIndex === -1) {
           if (settings.ntsel) {
             // Select new tab and add to end of array (most recently used)
@@ -279,6 +290,52 @@ export class TabManager {
       }
 
       logger.debug(`${logPrefix}Tab processed successfully`);
+    });
+  }
+
+  /**
+   * Relocate tab to right after its opener tab (reverse sibling order).
+   * When multiple tabs are opened from the same parent, each new tab is placed
+   * immediately after the parent, pushing older siblings to the right.
+   * Result: newest child is closest to the parent (left-to-right: new → old).
+   */
+  private async relocateAfterOpener(tabObj: any, logPrefix: string): Promise<void> {
+    return new Promise((resolve) => {
+      chrome.tabs.get(tabObj.openerTabId, (openerTab: any) => {
+        if (chrome.runtime.lastError || !openerTab) {
+          logger.debug(
+            `${logPrefix}Opener tab ${tabObj.openerTabId} not found, falling back to standard`,
+          );
+          resolve();
+          return;
+        }
+
+        const targetIndex = openerTab.index + 1;
+
+        chrome.tabs.get(tabObj.id, (newTab: any) => {
+          if (chrome.runtime.lastError || !newTab) {
+            logger.debug(`${logPrefix}Tab ${tabObj.id} no longer exists`);
+            resolve();
+            return;
+          }
+
+          if (newTab.index !== targetIndex) {
+            this.safeTabMove(tabObj.id, { index: targetIndex }, (result, error) => {
+              if (error) {
+                logger.error(`${logPrefix}Move after opener failed: ${error}`);
+              } else {
+                logger.debug(
+                  `${logPrefix}Tab ${tabObj.id} moved to index ${targetIndex} (after opener ${tabObj.openerTabId})`,
+                );
+              }
+              resolve();
+            });
+          } else {
+            logger.debug(`${logPrefix}Tab ${tabObj.id} already at correct position`);
+            resolve();
+          }
+        });
+      });
     });
   }
 

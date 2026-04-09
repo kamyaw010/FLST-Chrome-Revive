@@ -8,6 +8,7 @@ export interface FlstSettings {
   flip: number; // Tab flipping: 1 = on (last selected), 0 = off (left tab)
   ntsel: number; // New tab selection: 1 = select new tab, 0 = chrome standard
   reloc: number; // New tab location: 1 = far right, 0 = chrome standard
+  ntord: number; // New tab sibling order: 1 = reverse (newest near parent), 0 = chrome standard
   log: boolean; // Enable/disable logging
 }
 
@@ -17,6 +18,7 @@ export class SettingsManager {
     flip: 1,
     ntsel: 1,
     reloc: 1,
+    ntord: 0,
     log: false,
   };
 
@@ -37,6 +39,7 @@ export class SettingsManager {
       this.settings.flip = await storageManager.initializeSetting("flip", 1);
       this.settings.ntsel = await storageManager.initializeSetting("ntsel", 1);
       this.settings.reloc = await storageManager.initializeSetting("reloc", 1);
+      this.settings.ntord = await storageManager.initializeSetting("ntord", 0);
       this.settings.log = await storageManager.initializeSetting("log", false);
 
       // Apply logging setting
@@ -54,7 +57,7 @@ export class SettingsManager {
   public async updateSetting(
     key: keyof FlstSettings,
     value: any,
-    source: string = "unknown"
+    source: string = "unknown",
   ): Promise<void> {
     try {
       const originalValue = this.settings[key];

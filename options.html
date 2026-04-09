@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <title>FLST Options</title>
@@ -43,6 +43,20 @@
       </div>
 
       <div class="option-group">
+        <h2>New Tab Sibling Order</h2>
+        <div class="radio-group">
+          <div>
+            <input type="radio" name="ntord" value="1" id="ntord-on" />
+            <label class="radio-label" for="ntord-on">Reverse (newest near parent tab)</label>
+          </div>
+          <div>
+            <input type="radio" name="ntord" value="0" id="ntord-off" checked />
+            <label class="radio-label" for="ntord-off">Chrome standard</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="option-group">
         <h2>When a New Tab is Created</h2>
         <div class="radio-group">
           <div>
@@ -68,7 +82,7 @@
         >
       </div>
 
-      <div class="version">Rev 3.0.3</div>
+      <div class="version">Rev 3.3.1</div>
     </div>
     <script type="module" src="options.js"></script>
     <script type="module" src="ksc.js"></script>
