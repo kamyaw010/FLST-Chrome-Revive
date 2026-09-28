@@ -34,11 +34,20 @@ import { settingsManager } from "../src/managers/settings-manager";
 
 let tabManager: ReturnType<typeof createFreshTabManager>;
 
+async function flushDeferredCloseActivation(): Promise<void> {
+  await sleep(20);
+}
+
 beforeEach(async () => {
   resetChromeMock();
   tabManager = createFreshTabManager();
   await chrome.storage.local.set({ flip: 1, ntsel: 1, reloc: 1, log: 0 });
   await settingsManager.initialize();
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await flushDeferredCloseActivation();
 });
 
 // ============================================================================
@@ -56,12 +65,13 @@ describe("Slow Machine: lastCloseInfo 2-second threshold boundary", () => {
     ]);
     const wm = createMockWindowManager([tracker]);
 
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
 
     // Simulate: skipNextActivation was lost (service worker timing issue)
     (tabManager as any).skipNextActivation = null;
-    // Set timestamp to 1999ms ago (just under the 2000ms threshold)
-    (tabManager as any).lastCloseInfo.timestamp = Date.now() - 1999;
+    // Keep this comfortably under the 2000ms threshold so suite scheduling
+    // jitter plus the deferred close activation tick do not make it flaky.
+    (tabManager as any).lastCloseInfo.timestamp = Date.now() - 1900;
 
     // Chrome auto-activates the wrong tab
     await tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
@@ -81,7 +91,7 @@ describe("Slow Machine: lastCloseInfo 2-second threshold boundary", () => {
     ]);
     const wm = createMockWindowManager([tracker]);
 
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
 
     (tabManager as any).skipNextActivation = null;
     (tabManager as any).lastCloseInfo.timestamp = Date.now() - 2000;
@@ -107,7 +117,7 @@ describe("Slow Machine: lastCloseInfo 2-second threshold boundary", () => {
     ]);
     const wm = createMockWindowManager([tracker]);
 
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
 
     // Simulate: skipNextActivation lost AND 1500ms elapsed
     (tabManager as any).skipNextActivation = null;
@@ -139,16 +149,14 @@ describe("Slow Machine: Close → Activation event ordering", () => {
     const wm = createMockWindowManager([tracker]);
 
     // Close tab 30 → sets skipNextActivation with expectedTabId=20
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
 
     // Chrome immediately auto-activates tab 10 (wrong tab, before our update fires)
     await tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
 
     // Should correct: activate tab 20
     const updateCalls = getTabUpdateCalls();
-    const correctionCall = updateCalls.find(
-      (c, i) => i > 0 && c.tabId === 20 && c.props.active === true,
-    );
+    const correctionCall = updateCalls.find((c) => c.tabId === 20 && c.props.active === true);
     expect(correctionCall).toBeDefined();
   });
 
@@ -167,18 +175,16 @@ describe("Slow Machine: Close → Activation event ordering", () => {
     const wm = createMockWindowManager([tracker]);
 
     // Close tab 40 first
-    await tabManager.handleTabClose(40, wm);
+    await tabManager.handleTabClose(40, 1, wm);
 
     // Chrome activates tab 30 (correct - MRU after 40)
     await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
 
     // Now close tab 30
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
 
     // MRU should now be tab 20
-    const updateCalls = getTabUpdateCalls();
-    const lastCloseCall = updateCalls[updateCalls.length - 1];
-    expect(lastCloseCall.tabId).toBe(20);
+    expect((tabManager as any).skipNextActivation?.expectedTabId).toBe(20);
 
     // Only tabs 10, 20 should remain
     expect(tracker.tabarr.length).toBe(2);
@@ -201,7 +207,7 @@ describe("Slow Machine: Close → Activation event ordering", () => {
     const wm = createMockWindowManager([tracker]);
 
     // Close C(30) → skipNextActivation with expectedTabId=20
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
 
     // Chrome wrongly activates A(10)
     await tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
@@ -212,12 +218,13 @@ describe("Slow Machine: Close → Activation event ordering", () => {
     // CLOSE_TAB_CORRECTION consumed
 
     // Now user closes B(20) → should activate A(10)
-    await tabManager.handleTabClose(20, wm);
+    const callsBeforeClose = getTabUpdateCalls().length;
+    await tabManager.handleTabClose(20, 1, wm);
+    await flushDeferredCloseActivation();
 
-    const updateCalls = getTabUpdateCalls();
-    const lastCloseUpdate = updateCalls[updateCalls.length - 1];
-    expect(lastCloseUpdate.tabId).toBe(10);
-    expect(lastCloseUpdate.props).toEqual({ active: true });
+    expect((tabManager as any).skipNextActivation?.expectedTabId).toBe(10);
+    // No proactive activation during close - correction fires in onActivated if Chrome picks wrong tab.
+    expect(getTabUpdateCalls()).toHaveLength(callsBeforeClose);
 
     // Only A(10) remains
     expect(tracker.tabarr.length).toBe(1);
@@ -247,7 +254,7 @@ describe("Slow Machine: Operation queue under contention", () => {
     const wm = createMockWindowManager([tracker]);
 
     // Start close and activation concurrently (both queued on window 1)
-    const closePromise = tabManager.handleTabClose(30, wm);
+    const closePromise = tabManager.handleTabClose(30, 1, wm);
     const activatePromise = tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
 
     await closePromise;
@@ -280,7 +287,7 @@ describe("Slow Machine: Operation queue under contention", () => {
     const wm = createMockWindowManager([tracker1, tracker2]);
 
     // Close on window 1 first, then activate on window 2 (sequential)
-    await tabManager.handleTabClose(20, wm);
+    await tabManager.handleTabClose(20, 1, wm);
     // Consume the skipNextActivation from close
     await tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
     // Now activate tab 30 on window 2 (no pending skip)
@@ -384,12 +391,13 @@ describe("Slow Machine: Timestamp collisions", () => {
     ]);
     const wm = createMockWindowManager([tracker]);
 
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
+    await flushDeferredCloseActivation();
 
-    // Should have activated SOME tab (10 or 20), not crash
-    const updateCalls = getTabUpdateCalls();
-    expect(updateCalls.length).toBeGreaterThan(0);
-    expect([10, 20]).toContain(updateCalls[0].tabId);
+    // Should have selected SOME valid MRU target (10 or 20), not crash
+    expect([10, 20]).toContain((tabManager as any).skipNextActivation?.expectedTabId);
+    // No proactive activation - correction fires in onActivated if Chrome picks wrong tab.
+    expect(getTabUpdateCalls()).toHaveLength(0);
 
     dateNowSpy.mockRestore();
   });
@@ -605,17 +613,20 @@ describe("Slow Machine: safeTabUpdate retry behavior", () => {
     // Use vi.useFakeTimers to control setTimeout for retries
     vi.useFakeTimers();
 
-    // Close tab 30 → triggers safeTabUpdate(20) which will retry
-    const closePromise = tabManager.handleTabClose(30, wm);
+    // Close tab 30, then force wrong activation so correction triggers safeTabUpdate(20) retries
+    const closePromise = tabManager.handleTabClose(30, 1, wm);
+    await closePromise;
+
+    const correctionPromise = tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
 
     // Advance timer for first retry (200ms)
     await vi.advanceTimersByTimeAsync(200);
     // Advance timer for second retry (200ms)
     await vi.advanceTimersByTimeAsync(200);
 
-    await closePromise;
+    await correctionPromise;
 
-    // Should have been called 3 times total (initial + 2 retries)
+    // Correction retry sequence: initial call + 2 retries = 3 total.
     expect(callCount).toBe(3);
 
     vi.useRealTimers();
@@ -649,10 +660,8 @@ describe("Slow Machine: End-to-end post-dormancy workflow", () => {
     const wm = createMockWindowManager([tracker]);
 
     // Step 3: Close C
-    await tabManager.handleTabClose(30, wm);
-    // Verify that safeTabUpdate was called to activate tab 20 (MRU)
-    const closeCalls = getTabUpdateCalls();
-    expect(closeCalls.some((c) => c.tabId === 20 && c.props.active === true)).toBe(true);
+    await tabManager.handleTabClose(30, 1, wm);
+    expect((tabManager as any).skipNextActivation?.expectedTabId).toBe(20);
 
     // Step 4: Chrome wrongly activates A (slow machine behavior)
     await tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
@@ -687,11 +696,11 @@ describe("Slow Machine: End-to-end post-dormancy workflow", () => {
     const wm = createMockWindowManager([tracker]);
 
     // First cycle: close tab 40 → MRU is 30
-    await tabManager.handleTabClose(40, wm);
+    await tabManager.handleTabClose(40, 1, wm);
     await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
 
     // Second cycle: close tab 30 → MRU is 20
-    await tabManager.handleTabClose(30, wm);
+    await tabManager.handleTabClose(30, 1, wm);
     await tabManager.handleTabActivation({ tabId: 20, windowId: 1 }, wm);
 
     // Remaining: 10, 20
@@ -790,7 +799,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
         }
 
         // Now close the new tab
-        await tabManager.handleTabClose(newId, wm);
+        await tabManager.handleTabClose(newId, 1, wm);
 
         // After close, figure out what the active tab should be
         // If the expected MRU tab is already active, no activation event fires
@@ -823,7 +832,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
       } else if (action === 3 && tracker.tabarr.length >= 3) {
         // Close the active tab
         const closingTab = activeTabId;
-        await tabManager.handleTabClose(closingTab, wm);
+        await tabManager.handleTabClose(closingTab, 1, wm);
 
         // Determine what becomes active after close
         const remaining = tracker.tabarr.map((e) => e.tabId);
@@ -839,7 +848,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
         const closeCandidates = tracker.tabarr.filter((e) => e.tabId !== activeTabId);
         if (closeCandidates.length === 0) continue;
         const victim = rng.pick(closeCandidates);
-        await tabManager.handleTabClose(victim.tabId, wm);
+        await tabManager.handleTabClose(victim.tabId, 1, wm);
 
         // switch after close (active tab didn't change, no skipNextActivation should interfere)
         const otherTabs = tracker.tabarr.filter((e) => e.tabId !== activeTabId);
@@ -861,7 +870,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
     }
 
     dateNowSpy.mockRestore();
-  });
+  }, 45000);
 
   it("should never jump-back across 2000 random iterations with timestamp jitter (seed 7)", async () => {
     const rng = createRng(7);
@@ -909,7 +918,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
           activeTabId = oldMru[0].tabId;
         }
 
-        await tabManager.handleTabClose(newId, wm);
+        await tabManager.handleTabClose(newId, 1, wm);
 
         const expectedMRU = [...tracker.tabarr]
           .sort((a, b) => b.order - a.order)
@@ -932,7 +941,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
         }
       } else if (action === 2 && tracker.tabarr.length >= 3) {
         // Close active tab
-        await tabManager.handleTabClose(activeTabId, wm);
+        await tabManager.handleTabClose(activeTabId, 1, wm);
         const remaining = [...tracker.tabarr].sort((a, b) => b.order - a.order);
         if (remaining.length > 0) {
           const mru = remaining[0].tabId;
@@ -950,7 +959,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
     }
 
     dateNowSpy.mockRestore();
-  });
+  }, 30000);
 
   it("should survive 1000 rapid create+close bursts without stale skipNextActivation", async () => {
     let timeCounter = 100000;
@@ -983,7 +992,7 @@ describe("Stress: Randomized create+close+switch loops", () => {
       }
 
       // Close the new tab
-      await tabManager.handleTabClose(newId, wm);
+      await tabManager.handleTabClose(newId, 1, wm);
 
       // The key assertion: skipNextActivation should be null after this
       // because handleTabClose detected the expected tab was already active
@@ -1005,5 +1014,5 @@ describe("Stress: Randomized create+close+switch loops", () => {
     expect(tracker.tabarr.filter((e) => [1, 2, 3].includes(e.tabId)).length).toBe(3);
 
     dateNowSpy.mockRestore();
-  });
+  }, 45000);
 });

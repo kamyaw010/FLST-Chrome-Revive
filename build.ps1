@@ -74,11 +74,16 @@ if (-not $Watch) {
     Copy-Item "manifest.json" "dist/" -Force
 
     # Copy images
-    Copy-Item "img" "dist/img" -Recurse -Force
+    if (Test-Path "dist/img") { Remove-Item "dist/img" -Recurse -Force }
+    Copy-Item "img" "dist/" -Recurse -Force
 
-    # Copy HTML and CSS from root to dist
-    Copy-Item "options.html" "dist/" -Force
-    Copy-Item "options.css" "dist/" -Force
+    # Copy locales
+    if (Test-Path "dist/_locales") { Remove-Item "dist/_locales" -Recurse -Force }
+    Copy-Item "_locales" "dist/" -Recurse -Force
+
+    # Copy popup HTML and CSS from root to dist
+    Copy-Item "popup.html" "dist/" -Force
+    Copy-Item "popup.css" "dist/" -Force
 
     Write-Success "Static files copied"
 

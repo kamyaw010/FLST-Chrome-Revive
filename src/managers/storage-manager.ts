@@ -123,19 +123,23 @@ export class StorageManager {
   private async performSave(): Promise<void> {
     if (!this.pendingTrackingState) return;
 
+    const trackingStateToSave = this.pendingTrackingState;
+
     try {
       const stateData = {
-        trackingState: this.pendingTrackingState,
+        trackingState: trackingStateToSave,
         timestamp: Date.now(),
-        version: "3.3.0",
+        version: "3.4.3",
       };
 
       await this.setSetting("flstState", stateData);
-      logger.debug(`Tracking state saved: ${this.pendingTrackingState.length} windows`);
+      logger.debug(`Tracking state saved: ${trackingStateToSave.length} windows`);
 
-      // Clear pending state after successful save
-      this.pendingTrackingState = null;
-      this.saveDebounceTimer = null;
+      // Only clear the pending state if a newer save has not superseded this snapshot.
+      if (this.pendingTrackingState === trackingStateToSave) {
+        this.pendingTrackingState = null;
+        this.saveDebounceTimer = null;
+      }
     } catch (error) {
       logger.error("Error saving tracking state", error);
     }

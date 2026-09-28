@@ -160,6 +160,24 @@ describe("Add/Remove Window", () => {
     expect(tracker!.moveok).toBe(true);
   });
 
+  it("should replace an existing tracker instead of creating a duplicate", async () => {
+    setMockWindows([{ id: 5, tabs: [{ id: 50, active: true }] }]);
+    await windowManager.initializeTracking();
+
+    await windowManager.addWindow({
+      id: 5,
+      type: "normal",
+      tabs: [
+        { id: 50, active: false },
+        { id: 51, active: true },
+      ],
+    });
+
+    const trackers = windowManager.getAllTrackers().filter((tracker) => tracker.wid === 5);
+    expect(trackers).toHaveLength(1);
+    expect(trackers[0].tabarr.map((entry) => entry.tabId)).toEqual([50, 51]);
+  });
+
   it("should remove window tracker on window close", async () => {
     setMockWindows([
       { id: 1, tabs: [{ id: 10, active: true }] },

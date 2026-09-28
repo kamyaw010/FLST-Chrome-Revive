@@ -1,0 +1,17 @@
+{
+  "extensionName": {
+    "message": "FLST Chrome Revive"
+  },
+  "extensionDescription": {
+    "message": "Focus Last Selected Tab with MRU tab ordering and quick controls for tab flipping and new tab behavior."
+  },
+  "actionTitle": {
+    "message": "FLST Chrome"
+  },
+  "commandFlipDescription": {
+    "message": "Flip to previous tab"
+  },
+  "commandManagedNewTabDescription": {
+    "message": "Open optimized new tab"
+  }
+}

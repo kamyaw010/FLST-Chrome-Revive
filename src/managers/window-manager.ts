@@ -56,7 +56,7 @@ export class WindowManager {
           }
 
           // Always save current state after initialization
-          await storageManager.saveTrackingState(this.trackers);
+          await storageManager.saveTrackingState(this.trackers, true);
 
           logger.debug(`Window tracking initialized: ${this.trackers.length} windows`);
           resolve();
@@ -141,6 +141,8 @@ export class WindowManager {
       return;
     }
 
+    const existingTrackerIndex = this.trackers.findIndex((tracker) => tracker.wid === windowObj.id);
+
     const tracker: TabTracker = {
       tabarr: [],
       wid: windowObj.id,
@@ -149,8 +151,12 @@ export class WindowManager {
 
     if (!windowObj.tabs || !Array.isArray(windowObj.tabs)) {
       logger.debug(`AddWindow: Window ${windowObj.id} has no tabs or tabs is not an array`);
-      this.trackers.push(tracker);
-      await storageManager.saveTrackingState(this.trackers);
+      if (existingTrackerIndex !== -1) {
+        this.trackers[existingTrackerIndex] = tracker;
+      } else {
+        this.trackers.push(tracker);
+      }
+      await storageManager.saveTrackingState(this.trackers, true);
       return;
     }
 
@@ -169,7 +175,11 @@ export class WindowManager {
       tracker.tabarr.push(this.createTabEntry(selectedId));
     }
 
-    this.trackers.push(tracker);
+    if (existingTrackerIndex !== -1) {
+      this.trackers[existingTrackerIndex] = tracker;
+    } else {
+      this.trackers.push(tracker);
+    }
     logger.debug(
       `AddWindow: Window ${windowObj.id}, selected tab ${selectedId}, tabs: [${tracker.tabarr.map(
         (e) => e.tabId,
@@ -177,7 +187,7 @@ export class WindowManager {
     );
 
     // Save state after adding window
-    await storageManager.saveTrackingState(this.trackers);
+    await storageManager.saveTrackingState(this.trackers, true);
   }
 
   /**
@@ -188,7 +198,7 @@ export class WindowManager {
     if (index !== -1) {
       this.trackers.splice(index, 1);
       logger.debug(`RemoveWindow: Window ${windowId} removed`);
-      await storageManager.saveTrackingState(this.trackers);
+      await storageManager.saveTrackingState(this.trackers, true);
     }
   }
 

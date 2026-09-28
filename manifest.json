@@ -1,4 +1,5 @@
 {
+  "default_locale": "en",
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -10,20 +11,27 @@
       "32": "img/flstr32.png",
       "38": "img/flstr38.png"
     },
-    "default_title": "FLST Chrome"
+    "default_popup": "popup.html",
+    "default_title": "__MSG_actionTitle__"
   },
   "commands": {
-    "_execute_action": {
-      "description": "Tab Flipping",
+    "flip-current-tab": {
+      "description": "__MSG_commandFlipDescription__",
       "suggested_key": {
         "default": "Alt+N"
+      }
+    },
+    "open-managed-new-tab": {
+      "description": "__MSG_commandManagedNewTabDescription__",
+      "suggested_key": {
+        "default": "Alt+T"
       }
     }
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self'"
   },
-  "description": "Focus Last Selected Tab :: Provides natural / MRU tab ordering + Options for Tab Flipping, New Tab Select, and New Tab Location",
+  "description": "__MSG_extensionDescription__",
   "icons": {
     "128": "img/flstr128.png",
     "19": "img/flstr19.png",
@@ -33,8 +41,7 @@
   },
   "manifest_version": 3,
   "minimum_chrome_version": "88",
-  "name": "FLST Chrome Revive",
-  "options_page": "options.html",
+  "name": "__MSG_extensionName__",
   "permissions": ["storage", "alarms", "tabs"],
-  "version": "3.3.1"
+  "version": "3.4.3"
 }

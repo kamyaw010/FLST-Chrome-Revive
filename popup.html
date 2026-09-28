@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>FLST Quick Settings</title>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:;" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="popup-shell">
+      <header class="popup-header">
+        <img src="img/flstr48.png" alt="FLST Icon" />
+        <div>
+          <h1>FLST</h1>
+          <p id="popupSubtitle">Quick Settings</p>
+        </div>
+      </header>
+
+      <button type="button" id="flipNow" class="primary-action">Flip To Previous Tab</button>
+      <button type="button" id="openManagedNewTab" class="secondary-action">Open Optimized New Tab</button>
+
+      <div class="setting-groups" id="settingGroups"></div>
+
+      <footer class="popup-footer">
+        <button type="button" id="resetDefaults" class="secondary-action">Reset</button>
+      </footer>
+
+      <div class="popup-version" id="popupVersion">Rev 3.4.0</div>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

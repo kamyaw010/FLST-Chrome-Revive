@@ -1,5 +1,5 @@
 //
-// FLST Chrome <<>> Focus Last Selected Tab <<>> Rev 3.3.1
+// FLST Chrome <<>> Focus Last Selected Tab <<>> Rev 3.4.3
 //
 // FLST provides natural / MRU tab ordering, plus Options for
 // Tab-Flipping, New-Tab-Select, and New-Tab-Location.
@@ -63,10 +63,10 @@ chrome.tabs.onCreated.addListener((tab) => {
   });
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   ensureInitialized().then(() => {
     logger.debug(`Tab removed event fired for tabId ${tabId}`);
-    tabManager.handleTabClose(tabId, windowManager);
+    tabManager.handleTabClose(tabId, removeInfo.windowId, windowManager);
   });
 });
 
@@ -91,12 +91,33 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
   );
 });
 
-// --- Extension action ---
-chrome.action.onClicked.addListener((tab) => {
+// --- Commands ---
+chrome.commands.onCommand.addListener((command) => {
   ensureInitialized().then(() => {
-    tabManager.handleTabFlip(tab, windowManager).catch((error) => {
-      logger.error("Error handling tab flip", error);
-    });
+    if (command === "flip-current-tab") {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const activeTab = tabs[0];
+        if (!activeTab) {
+          return;
+        }
+
+        tabManager.handleTabFlip(activeTab, windowManager).catch((error) => {
+          logger.error("Error handling tab flip command", error);
+        });
+      });
+      return;
+    }
+
+    if (command === "open-managed-new-tab") {
+      tabManager.openManagedNewTab(windowManager).catch((error) => {
+        logger.error("Error handling managed new-tab command", error);
+      });
+      return;
+    }
+
+    if (command) {
+      logger.debug(`Unknown command received: ${command}`);
+    }
   });
 });
 
@@ -129,6 +150,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(() => sendResponse({ success: true }))
         .catch((error) => {
           logger.error("Error handling setting update", error);
+          sendResponse({ success: false, error: error.message });
+        });
+    });
+    return true;
+  }
+
+  if (message.type === "popupFlipCurrentTab") {
+    ensureInitialized().then(() => {
+      tabManager
+        .handleTabFlip(message.data, windowManager)
+        .then(() => sendResponse({ success: true }))
+        .catch((error) => {
+          logger.error("Error handling popup flip", error);
+          sendResponse({ success: false, error: error.message });
+        });
+    });
+    return true;
+  }
+
+  if (message.type === "popupOpenManagedNewTab") {
+    ensureInitialized().then(() => {
+      tabManager
+        .openManagedNewTab(windowManager)
+        .then(() => sendResponse({ success: true }))
+        .catch((error) => {
+          logger.error("Error opening managed new tab from popup", error);
           sendResponse({ success: false, error: error.message });
         });
     });

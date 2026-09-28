@@ -79,10 +79,10 @@ export class SettingsManager {
   }
 
   /**
-   * Get current settings
+   * Get current settings (returns live reference - do not mutate)
    */
-  public getSettings(): FlstSettings {
-    return { ...this.settings };
+  public getSettings(): Readonly<FlstSettings> {
+    return this.settings;
   }
 
   /**

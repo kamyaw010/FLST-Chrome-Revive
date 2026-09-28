@@ -1,0 +1,17 @@
+{
+  "extensionName": {
+    "message": "FLST Chrome Revive"
+  },
+  "extensionDescription": {
+    "message": "通过最近使用顺序管理标签页，并提供快速切换与新标签页行为控制。"
+  },
+  "actionTitle": {
+    "message": "FLST Chrome"
+  },
+  "commandFlipDescription": {
+    "message": "切换到上一个标签页"
+  },
+  "commandManagedNewTabDescription": {
+    "message": "以优化方式打开新标签页"
+  }
+}

@@ -3,14 +3,16 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { resetChromeMock } from "./chrome-mock";
-import { createFreshServiceWorkerManager, createFreshStorageManager } from "./test-helpers";
+import { getMockStorageData, resetChromeMock } from "./chrome-mock";
+import { storageManager } from "../src/managers/storage-manager";
+import { createFreshServiceWorkerManager, createTracker, sleep } from "./test-helpers";
 
 let swManager: ReturnType<typeof createFreshServiceWorkerManager>;
 
 beforeEach(() => {
   resetChromeMock();
-  createFreshStorageManager();
+  (storageManager as any).saveDebounceTimer = null;
+  (storageManager as any).pendingTrackingState = null;
   swManager = createFreshServiceWorkerManager();
 });
 
@@ -127,6 +129,18 @@ describe("Service Worker Suspend", () => {
     swManager.handleSuspend();
 
     expect(swManager.isServiceWorkerActive()).toBe(false);
+  });
+
+  it("should flush pending tracking state on suspend", async () => {
+    await storageManager.saveTrackingState([createTracker(1, [{ id: 10, order: 1000 }])]);
+
+    expect(getMockStorageData().flstState).toBeUndefined();
+
+    swManager.handleSuspend();
+    await sleep(10);
+
+    expect(getMockStorageData().flstState.trackingState).toHaveLength(1);
+    expect(getMockStorageData().flstState.trackingState[0].tabarr[0].tabId).toBe(10);
   });
 });
 

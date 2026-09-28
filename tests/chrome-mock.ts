@@ -134,6 +134,7 @@ const mockWindowsApi = {
 // --- Alarms ---
 
 let mockAlarms: Record<string, { name: string; periodInMinutes?: number }> = {};
+let mockContextMenus: Array<Record<string, any>> = [];
 
 const mockAlarmsApi = {
   onAlarm: new MockEvent(),
@@ -159,13 +160,41 @@ const mockRuntimeApi = {
   onInstalled: new MockEvent(),
   onMessage: new MockEvent(),
   sendMessage: vi.fn(),
-  getManifest: vi.fn(() => ({ name: "FLST Chrome Revive", version: "3.3.0" })),
+  openOptionsPage: vi.fn(() => Promise.resolve()),
+  getManifest: vi.fn(() => ({ name: "FLST Chrome Revive", version: "3.4.1" })),
+};
+
+const mockI18nApi = {
+  getUILanguage: vi.fn(() => "en-US"),
+  getMessage: vi.fn((_name: string) => ""),
 };
 
 // --- Action ---
 
 const mockActionApi = {
   onClicked: new MockEvent(),
+};
+
+// --- Context Menus ---
+
+const mockContextMenusApi = {
+  onClicked: new MockEvent(),
+  create: vi.fn((properties: Record<string, any>, callback?: () => void) => {
+    mockContextMenus.push({ ...properties });
+    if (callback) callback();
+    return properties.id;
+  }),
+  update: vi.fn((menuItemId: string, properties: Record<string, any>, callback?: () => void) => {
+    const item = mockContextMenus.find((entry) => entry.id === menuItemId);
+    if (item) {
+      Object.assign(item, properties);
+    }
+    if (callback) callback();
+  }),
+  removeAll: vi.fn((callback?: () => void) => {
+    mockContextMenus = [];
+    if (callback) callback();
+  }),
 };
 
 // === Assemble global chrome object ===
@@ -176,7 +205,9 @@ const chromeMock = {
   windows: mockWindowsApi,
   alarms: mockAlarmsApi,
   runtime: mockRuntimeApi,
+  i18n: mockI18nApi,
   action: mockActionApi,
+  contextMenus: mockContextMenusApi,
 };
 
 (globalThis as any).chrome = chromeMock;
@@ -188,6 +219,7 @@ export function resetChromeMock() {
   mockTabs = [];
   mockWindows = [];
   mockAlarms = {};
+  mockContextMenus = [];
   tabUpdateCalls = [];
   tabMoveCalls = [];
   mockRuntimeApi.lastError = undefined;
@@ -207,10 +239,16 @@ export function resetChromeMock() {
   mockAlarmsApi.get.mockClear();
   mockAlarmsApi.clear.mockClear();
   mockRuntimeApi.sendMessage.mockClear();
+  mockRuntimeApi.openOptionsPage.mockClear();
+  mockI18nApi.getUILanguage.mockClear();
+  mockI18nApi.getMessage.mockClear();
+  mockContextMenusApi.create.mockClear();
+  mockContextMenusApi.update.mockClear();
+  mockContextMenusApi.removeAll.mockClear();
 }
 
 export function setMockTabs(
-  tabs: Array<{ id: number; windowId: number; active?: boolean; index?: number }>,
+  tabs: Array<{ id: number; windowId: number; active?: boolean; index?: number; pinned?: boolean }>,
 ) {
   mockTabs = tabs.map((t, i) => ({
     id: t.id,
@@ -218,7 +256,7 @@ export function setMockTabs(
     active: t.active ?? false,
     index: t.index ?? i,
     highlighted: false,
-    pinned: false,
+    pinned: t.pinned ?? false,
     incognito: false,
     selected: false,
     discarded: false,
@@ -275,4 +313,8 @@ export function getMockStorageData() {
 
 export function setMockStorageData(data: Record<string, any>) {
   storageData = { ...data };
+}
+
+export function getMockContextMenus() {
+  return mockContextMenus;
 }

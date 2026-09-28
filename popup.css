@@ -1,0 +1,145 @@
+:root {
+    --bg: #0f1822;
+    --panel: #162331;
+    --panel-strong: #1c3043;
+    --text: #e8f1f8;
+    --muted: #8eb3cc;
+    --accent: #4dc2ff;
+    --accent-strong: #1794d2;
+    --border: #29465d;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    min-width: 360px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', 'Noto Sans', sans-serif;
+}
+
+body {
+    padding: 12px;
+}
+
+.popup-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.popup-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    background: linear-gradient(135deg, rgba(77, 194, 255, 0.18), rgba(23, 148, 210, 0.08));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.popup-header img {
+    width: 36px;
+    height: 36px;
+}
+
+.popup-header h1 {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1;
+}
+
+.popup-header p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.primary-action,
+.secondary-action,
+.choice-button {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.primary-action {
+    width: 100%;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    border: none;
+    color: #082433;
+    font-weight: 700;
+}
+
+.setting-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.setting-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px;
+}
+
+.setting-card h2 {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.setting-choices {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.choice-button {
+    padding: 10px 8px;
+    background: var(--panel-strong);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.choice-button.is-active {
+    background: rgba(77, 194, 255, 0.18);
+    border-color: var(--accent);
+    color: #ffffff;
+}
+
+.popup-footer {
+    display: flex;
+}
+
+.secondary-action {
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    color: var(--text);
+    font-weight: 600;
+}
+
+.secondary-action:hover,
+.choice-button:hover {
+    border-color: var(--accent);
+}
+
+.primary-action:hover {
+    filter: brightness(1.05);
+}
+
+.popup-version {
+    color: var(--muted);
+    font-size: 11px;
+    text-align: right;
+}
