@@ -92,6 +92,9 @@ public
 tmp/
 temp/
 
+# Local test sandbox (Chrome for Testing, profiles, logs)
+.sandbox/
+
 # Editor directories and files
 .vscode/
 .idea/

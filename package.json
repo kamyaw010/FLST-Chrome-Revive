@@ -13,10 +13,13 @@
     "dev": "npm run build:dev",
     "prod": "npm run build:prod",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "node e2e/run.mjs"
   },
   "devDependencies": {
+    "@puppeteer/browsers": "^3.2.3",
     "@types/chrome": "^0.0.268",
+    "puppeteer-core": "^25.12.0",
     "rimraf": "^5.0.5",
     "typescript": "^5.4.5",
     "vitest": "^3.2.4"
