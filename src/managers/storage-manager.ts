@@ -129,7 +129,7 @@ export class StorageManager {
       const stateData = {
         trackingState: trackingStateToSave,
         timestamp: Date.now(),
-        version: "3.4.3",
+        version: "3.4.4",
       };
 
       await this.setSetting("flstState", stateData);

@@ -2,7 +2,7 @@
 
 **Focus Last Selected Tab :: Provides natural / MRU tab ordering + Options for Tab Flipping, New Tab Select, and New Tab Location**
 
-[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](https://github.com/kamyaw010/FLST-Chrome-Revive)
+[![Version](https://img.shields.io/badge/version-3.4.4-blue.svg)](https://github.com/kamyaw010/FLST-Chrome-Revive)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Extension-green.svg)](https://chromewebstore.google.com/detail/flst-chrome-revive/alipmjpidmffnmkccdacnlfllkeogapb)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-orange.svg)](https://developer.chrome.com/docs/extensions/mv3/)
 
