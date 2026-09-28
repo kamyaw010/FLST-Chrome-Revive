@@ -2,7 +2,7 @@ import { logger } from "../../utils/logger.js";
 import { storageManager } from "../storage-manager.js";
 import { settingsManager } from "../settings-manager.js";
 import { SkipActivationReason } from "../../types.js";
-import { addTabToMRU } from "./mru-utils.js";
+import { addTabToMRU, getLeastRecentOrder } from "./mru-utils.js";
 import type { TabManagerRuntime } from "./runtime.js";
 
 async function relocateAfterOpener(
@@ -211,7 +211,10 @@ export async function handleNewTabEvent(
           addTabToMRU(tracker.tabarr, tabObj.id, "last");
           logger.debug(`${logPrefix}[select new tab]`);
         } else {
-          addTabToMRU(tracker.tabarr, tabObj.id, "first");
+          // Background tabs are not "recently used" until the user visits them.
+          // Rank them below every existing entry so they never outrank the
+          // active tab, which would break Alt+N flipping and close-selection.
+          addTabToMRU(tracker.tabarr, tabObj.id, "first", getLeastRecentOrder(tracker.tabarr));
           logger.debug(`${logPrefix}[chrome standard - don't select]`);
         }
       } else {

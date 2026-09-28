@@ -78,7 +78,19 @@ export async function handleTabCloseEvent(
   // operation could delay us past the point where onActivated is processed,
   // causing the activation handler to see null and let the wrong tab through.
   // Setting it here guarantees onActivated always finds the correct target.
-  if (tabarr.length > 1 && settings.flip) {
+  // Setting correction state is only valid when the closed tab was the active
+  // one, because that is the only case where Chrome fires onActivated afterwards.
+  // When a background tab is closed, a stale skipNextActivation entry would
+  // hijack the user's next manual tab switch (forcing focus back to the MRU
+  // target of the close). Use the last known active tab when available and fall
+  // back to the MRU leader (the active tab is normally the most recent one).
+  const knownActiveTabId = runtime.lastKnownActiveTabIds.get(foundWindowId);
+  const closedWasActive =
+    knownActiveTabId !== undefined
+      ? knownActiveTabId === tabId
+      : getMostRecentTabId(tabarr) === tabId;
+
+  if (tabarr.length > 1 && settings.flip && closedWasActive) {
     const nextTabId = getMostRecentTabExcluding(tabarr, tabId);
     if (nextTabId) {
       const currentActiveTabId = runtime.lastKnownActiveTabIds.get(foundWindowId);
@@ -103,7 +115,7 @@ export async function handleTabCloseEvent(
     }
   } else {
     logger.debug(
-      `CloseTab: Tab flipping OFF or no tabs remaining - letting Chrome handle selection`,
+      `CloseTab: No correction needed (flip=${settings.flip}, closedWasActive=${closedWasActive}, remaining=${tabarr.length})`,
     );
   }
 

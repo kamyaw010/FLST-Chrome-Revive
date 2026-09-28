@@ -168,13 +168,16 @@ describe("Tab Close (MRU Selection)", () => {
   });
 
   it("should select correct MRU tab, not first tab in array", async () => {
-    // Tab 20 is the most recent (highest order), tab 10 is first in array
+    // Tab 10 is first in the array, tab 20 has the highest stored order
     const tracker = createTracker(1, [
       { id: 10, order: 1000 },
-      { id: 20, order: 5000 }, // MRU
+      { id: 20, order: 5000 }, // previous MRU
       { id: 30, order: 3000 }, // active, being closed
     ]);
     const wm = createMockWindowManager([tracker]);
+
+    // Mark tab 30 as active (close correction only applies to the active tab)
+    await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
 
     // Close tab 30
     await tabManager.handleTabClose(30, 1, wm);
@@ -1519,5 +1522,88 @@ describe("Full MRU Workflow", () => {
     // Remaining tabs should still be intact
     expect(tracker.tabarr.length).toBe(1);
     expect(tracker.tabarr.map((e) => e.tabId)).toEqual([10]);
+  });
+});
+
+// ============================================================================
+// Background Tab MRU Correctness (regression)
+// ============================================================================
+
+describe("Background Tab MRU Correctness (regression)", () => {
+  it("should not mark a background new tab (ntsel=0) as most recently used", async () => {
+    await settingsManager.updateSetting("ntsel", 0, "test");
+
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+      { id: 30, order: 3000 },
+    ]);
+    const wm = createMockWindowManager([tracker]);
+
+    await tabManager.handleNewTab({ id: 40, windowId: 1, active: false }, wm);
+
+    const sorted = getMRUSortedTabIds(tracker);
+    expect(sorted[0]).toBe(30);
+    expect(sorted[sorted.length - 1]).toBe(40);
+    expect(tracker.tabarr.length).toBe(4);
+  });
+
+  it("should not schedule close correction when a non-active tab is closed", async () => {
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+      { id: 30, order: 3000 },
+    ]);
+    const wm = createMockWindowManager([tracker]);
+
+    // Tab 30 is the active tab
+    await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
+
+    // Close tab 20, which is NOT active
+    await tabManager.handleTabClose(20, 1, wm);
+
+    expect((tabManager as any).skipNextActivation).toBeNull();
+    expect((tabManager as any).lastCloseInfo).toBeNull();
+    expect(tracker.tabarr.map((e) => e.tabId)).toEqual([10, 30]);
+  });
+
+  it("should still schedule correction when the active tab is closed", async () => {
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+      { id: 30, order: 3000 },
+    ]);
+    const wm = createMockWindowManager([tracker]);
+
+    await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
+    await tabManager.handleTabClose(30, 1, wm);
+
+    expect((tabManager as any).skipNextActivation?.expectedTabId).toBe(20);
+    expect((tabManager as any).lastCloseInfo?.expectedTabId).toBe(20);
+  });
+
+  it("should not hijack manual activation after background tabs were opened and a background tab closed", async () => {
+    await settingsManager.updateSetting("ntsel", 0, "test");
+
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+      { id: 30, order: 3000 },
+    ]);
+    const wm = createMockWindowManager([tracker]);
+    await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
+
+    await tabManager.handleNewTab({ id: 40, windowId: 1, active: false }, wm);
+    await tabManager.handleNewTab({ id: 41, windowId: 1, active: false }, wm);
+    expect(getMRUSortedTabIds(tracker)[0]).toBe(30);
+
+    await tabManager.handleTabClose(40, 1, wm);
+    expect((tabManager as any).skipNextActivation).toBeNull();
+
+    const updateCallsBefore = getTabUpdateCalls().length;
+    await tabManager.handleTabActivation({ tabId: 10, windowId: 1 }, wm);
+
+    expect(getMRUSortedTabIds(tracker)[0]).toBe(10);
+    expect(getTabUpdateCalls().length).toBe(updateCallsBefore);
   });
 });

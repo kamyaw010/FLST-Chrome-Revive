@@ -441,3 +441,98 @@ describe("Popup Window Type", () => {
     expect(tracker!.moveok).toBe(false);
   });
 });
+
+// ============================================================================
+// Reconciliation - background tab recency
+// ============================================================================
+
+describe("Reconciliation Background Tab Recency (regression)", () => {
+  it("should assign strip-order recency when building fresh state", async () => {
+    setMockWindows([
+      {
+        id: 1,
+        tabs: [
+          { id: 10, active: false },
+          { id: 20, active: false },
+          { id: 30, active: true },
+        ],
+      },
+    ]);
+
+    await windowManager.initializeTracking();
+
+    const tracker = windowManager.getWindowTracker(1)!;
+    const sorted = [...tracker.tabarr].sort((a, b) => b.order - a.order).map((e) => e.tabId);
+    expect(sorted).toEqual([30, 20, 10]);
+  });
+
+  it("should not rank a missing inactive tab above existing recent tabs", async () => {
+    setMockWindows([
+      {
+        id: 1,
+        tabs: [
+          { id: 10, active: true },
+          { id: 20, active: false },
+          { id: 30, active: false },
+        ],
+      },
+    ]);
+
+    const storedState = {
+      trackingState: [
+        {
+          wid: 1,
+          moveok: true,
+          tabarr: [
+            { tabId: 10, order: 5000 },
+            { tabId: 20, order: 1000 },
+          ],
+        },
+      ],
+      timestamp: Date.now() - 500,
+      version: "3.4.3",
+    };
+    setMockStorageData({ flstState: storedState });
+
+    await windowManager.initializeTracking();
+
+    const tracker = windowManager.getWindowTracker(1)!;
+    const orderOf = (tabId: number) => tracker.tabarr.find((e) => e.tabId === tabId)!.order;
+    const sorted = [...tracker.tabarr].sort((a, b) => b.order - a.order).map((e) => e.tabId);
+
+    expect(sorted[0]).toBe(10);
+    expect(orderOf(30)).toBeLessThan(orderOf(20));
+    expect(sorted[sorted.length - 1]).toBe(30);
+  });
+
+  it("should rank a missing active tab as most recent", async () => {
+    setMockWindows([
+      {
+        id: 1,
+        tabs: [
+          { id: 10, active: false },
+          { id: 20, active: true },
+        ],
+      },
+    ]);
+
+    const storedState = {
+      trackingState: [
+        {
+          wid: 1,
+          moveok: true,
+          tabarr: [{ tabId: 10, order: 5000 }],
+        },
+      ],
+      timestamp: Date.now() - 500,
+      version: "3.4.3",
+    };
+    setMockStorageData({ flstState: storedState });
+
+    await windowManager.initializeTracking();
+
+    const tracker = windowManager.getWindowTracker(1)!;
+    const sorted = [...tracker.tabarr].sort((a, b) => b.order - a.order).map((e) => e.tabId);
+    expect(sorted[0]).toBe(20);
+  });
+});

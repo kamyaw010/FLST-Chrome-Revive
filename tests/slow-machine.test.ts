@@ -391,6 +391,9 @@ describe("Slow Machine: Timestamp collisions", () => {
     ]);
     const wm = createMockWindowManager([tracker]);
 
+    // Mark tab 30 as active (close correction only applies to the active tab)
+    await tabManager.handleTabActivation({ tabId: 30, windowId: 1 }, wm);
+
     await tabManager.handleTabClose(30, 1, wm);
     await flushDeferredCloseActivation();
 

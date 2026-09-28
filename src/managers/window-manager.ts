@@ -2,6 +2,7 @@
 
 import { logger } from "../utils/logger.js";
 import { storageManager } from "./storage-manager.js";
+import { getLeastRecentOrder } from "./tab-operations/mru-utils.js";
 import type { TabTracker, TabInfo, TabMRUEntry } from "../types.js";
 
 export class WindowManager {
@@ -161,11 +162,21 @@ export class WindowManager {
     }
 
     let selectedId = -1;
-    for (const tab of windowObj.tabs) {
-      if (!tab || !tab.id) continue;
+    const tabList = windowObj.tabs.filter((tab: any) => tab && tab.id);
+    const inactiveCount = tabList.filter((tab: any) => !tab.active).length;
+    const baseOrder = Date.now();
+    let inactiveIndex = 0;
 
+    for (const tab of tabList) {
       if (!tab.active) {
-        tracker.tabarr.push(this.createTabEntry(tab.id));
+        // Rebuilt state: inactive tabs fall back to tab-strip order
+        // (left = older, right = newer) with deterministic timestamps so
+        // they never tie with, or outrank, the active tab.
+        tracker.tabarr.push({
+          tabId: tab.id,
+          order: baseOrder - (inactiveCount - inactiveIndex),
+        });
+        inactiveIndex += 1;
       } else {
         selectedId = tab.id;
       }
@@ -407,9 +418,13 @@ export class WindowManager {
       for (const tabId of missingTabs) {
         const tab = window.tabs.find((t: any) => t.id === tabId);
         if (tab) {
-          const entry = this.createTabEntry(tabId);
+          // If this is the active tab, put it at the end (most recent).
+          // Inactive tabs are not "recently used" until visited, so rank
+          // them below every existing entry.
+          const entry = tab.active
+            ? this.createTabEntry(tabId)
+            : { tabId, order: getLeastRecentOrder(tracker.tabarr) };
 
-          // If this is the active tab, put it at the end (most recent)
           if (tab.active) {
             tracker.tabarr.push(entry);
             logger.debug(`Added active tab ${tabId} to end of MRU for window ${window.id}`);

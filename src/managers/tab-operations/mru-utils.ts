@@ -4,8 +4,8 @@ export function addTabToMRU(
   tabarr: TabMRUEntry[],
   tabId: number,
   position: "first" | "last" = "last",
+  order: number = Date.now(),
 ): void {
-  const order = Date.now();
   const entry: TabMRUEntry = { tabId, order };
 
   if (position === "first") {
@@ -13,6 +13,19 @@ export function addTabToMRU(
   } else {
     tabarr.push(entry);
   }
+}
+
+export function getLeastRecentOrder(tabarr: TabMRUEntry[]): number {
+  if (tabarr.length === 0) return Date.now();
+
+  let minOrder = tabarr[0].order;
+  for (const entry of tabarr) {
+    if (entry.order < minOrder) {
+      minOrder = entry.order;
+    }
+  }
+
+  return minOrder - 1;
 }
 
 export function removeTabFromMRU(tabarr: TabMRUEntry[], tabId: number): number {
