@@ -70,7 +70,7 @@ Access the options page by:
 | Setting              | Description                          | Default |
 | -------------------- | ------------------------------------ | ------- |
 | **Tab Flipping**     | Enable/disable Alt+N tab switching   | On      |
-| **New Tab Select**   | Auto-activate newly created tabs     | Off     |
+| **New Tab Select**   | Auto-activate user-created tabs (Ctrl+T / new tab button); link-opened tabs stay in the background | On      |
 | **New Tab Location** | Where new tabs appear in the tab bar | End     |
 
 ## 🏗️ Technical Architecture

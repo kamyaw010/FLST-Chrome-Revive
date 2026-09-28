@@ -565,6 +565,25 @@ describe("New Tab Handling", () => {
     expect(sorted[0]).toBe(30);
   });
 
+  it("should not steal focus for link-opened background tabs when ntsel=1", async () => {
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+    ]);
+    const wm = createMockWindowManager([tracker]);
+
+    await tabManager.handleNewTab(
+      { id: 30, windowId: 1, openerTabId: 10, active: false },
+      wm,
+    );
+
+    expect(getTabUpdateCalls()).toHaveLength(0);
+
+    const sorted = getMRUSortedTabIds(tracker);
+    expect(sorted[0]).toBe(20);
+    expect(sorted[sorted.length - 1]).toBe(30);
+  });
+
   it("should add new tab to beginning of MRU when ntsel=0", async () => {
     await settingsManager.updateSetting("ntsel", 0, "test");
 
@@ -1042,7 +1061,7 @@ describe("Option Matrix - New Tab Without Opener", () => {
 
 describe("Option Matrix - New Tab With Opener", () => {
   for (const config of optionMatrix) {
-    it(`should honor opener precedence for ${describeConfig(config)}`, async () => {
+    it(`should not force-select opener tabs for ${describeConfig(config)}`, async () => {
       await applyBehaviorConfig(config);
 
       const tracker = createTracker(1, [
@@ -1074,11 +1093,9 @@ describe("Option Matrix - New Tab With Opener", () => {
         expect(moveCalls).toHaveLength(0);
       }
 
-      if (config.ntsel === 1) {
-        expect(updateCalls).toHaveLength(1);
-      } else {
-        expect(updateCalls).toHaveLength(0);
-      }
+      // Link-opened tabs carry an openerTabId and must never steal focus,
+      // regardless of the ntsel setting.
+      expect(updateCalls).toHaveLength(0);
     });
   }
 });

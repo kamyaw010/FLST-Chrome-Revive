@@ -201,7 +201,15 @@ export async function handleNewTabEvent(
 
     if (tabObj.id) {
       if (existingIndex === -1) {
-        if (settings.ntsel) {
+        // Chrome does not include openerTabId in the onCreated event object, so
+        // the reliable signal for a background/link open is `active === false`
+        // (middle-click, Ctrl+click, target=_blank). Never steal focus for those;
+        // only directly created tabs (Ctrl+T / new tab button, created active)
+        // follow the ntsel setting.
+        const isBackgroundCreated = tabObj.active === false;
+        const isLinkOpened = Boolean(tabObj.openerTabId);
+
+        if (settings.ntsel && !isBackgroundCreated && !isLinkOpened) {
           // recentSelectedNewTabs was already written at function entry (before
           // queueOperation) to avoid a race with fast close. No need to repeat.
           if (!managedInfo?.suppressActivation) {
@@ -215,7 +223,11 @@ export async function handleNewTabEvent(
           // Rank them below every existing entry so they never outrank the
           // active tab, which would break Alt+N flipping and close-selection.
           addTabToMRU(tracker.tabarr, tabObj.id, "first", getLeastRecentOrder(tracker.tabarr));
-          logger.debug(`${logPrefix}[chrome standard - don't select]`);
+          logger.debug(
+            `${logPrefix}[chrome standard - don't select${
+              isBackgroundCreated || isLinkOpened ? " (background/link-opened)" : ""
+            }]`,
+          );
         }
       } else {
         logger.debug(`${logPrefix}Tab already exists in MRU at index ${existingIndex}`);

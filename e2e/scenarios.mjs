@@ -568,6 +568,78 @@ export async function htmlLinksBackground(ctx) {
   }
 }
 
+export async function htmlLinksBackgroundNtsel1(ctx) {
+  const { browser, checks } = ctx;
+  const popup = await prepare(ctx, { flip: 1, ntsel: 1, reloc: 1, ntord: 0, log: true });
+  await closePopup(ctx, popup);
+
+  const { server, base } = await startLinkServer();
+  try {
+    const windowId = await mainWindowId(ctx);
+    const A = await createTab(browser, { windowId });
+    const B = await createTab(browser, { windowId });
+    await sleep(600);
+    await activateTab(browser, A.id);
+    await sleep(250);
+    await activateTab(browser, B.id);
+    await sleep(300);
+
+    const pageTab = await createTab(browser, { windowId, url: `${base}/links`, active: true });
+    await sleep(900);
+    const page = await puppeteerPageForUrl(browser, `${base}/links`);
+    if (!page) {
+      checks.check("link page loaded", false, "no puppeteer page");
+      return;
+    }
+    await page.waitForSelector("#b1");
+    checks.check("link page loaded", true, `tab=${pageTab.id}`);
+
+    await page.keyboard.down("Control");
+    await page.click("#b1", { noWaitAfter: true });
+    await page.keyboard.up("Control");
+    await sleep(1200);
+
+    const b2Handle = await page.$("#b2");
+    const box = b2Handle ? await b2Handle.boundingBox() : null;
+    if (!box) {
+      checks.check("link b2 visible for middle click", false, "no bounding box");
+      return;
+    }
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "middle" });
+    await sleep(1200);
+
+    const tabs = await getTabs(browser);
+    const B1 = tabByFragment(tabs, "b1");
+    const B2 = tabByFragment(tabs, "b2");
+    checks.check("ctrl+click background link opened", Boolean(B1), `id=${B1?.id}`);
+    checks.check("middle-click background link opened", Boolean(B2), `id=${B2?.id}`);
+    if (!B1 || !B2) return;
+
+    const activeAfterOpens = await getActiveTab(browser);
+    checks.equals(
+      "ntsel=1 keeps current tab active for background links",
+      activeAfterOpens?.id,
+      pageTab.id,
+    );
+    checks.equals(
+      "background links do not outrank page tab with ntsel=1",
+      mruIds(await getMruForWindow(browser, windowId), 1),
+      [pageTab.id],
+    );
+
+    const flip1 = await flipAndWait(browser, B.id);
+    checks.equals("Alt+N after background links -> previous visited tab", flip1.after, B.id);
+
+    await activateTab(browser, B1.id);
+    await sleep(600);
+    await closeTab(browser, B1.id);
+    const afterClose = await waitForActiveTab(browser, B.id, 6000);
+    checks.equals("closing visited background link -> previous tab", afterClose?.id, B.id);
+  } finally {
+    server.close();
+  }
+}
+
 async function flipInWindow(ctx, windowId) {  const { page } = await openPopupPage(ctx.browser, ctx.extensionId, windowId);
   await triggerPopupFlipAction(page);
 }
@@ -773,17 +845,41 @@ export async function backgroundLinkNtsel1(ctx) {
   await sleep(1200);
   const activeAfterOpen = await getActiveTab(browser);
   ctx.log(`ntsel=1 background link: active=${activeAfterOpen?.id} link=${link.id}`);
-  checks.equals("ntsel=1 selects the newly created background link", activeAfterOpen?.id, link.id);
-  checks.equals("selected link becomes MRU head", mruIds(await getMruForWindow(browser, windowId), 1), [link.id]);
+  checks.equals("ntsel=1 does not steal focus for link-opened tabs", activeAfterOpen?.id, B.id);
+  checks.equals("link does not outrank the active tab", mruIds(await getMruForWindow(browser, windowId), 2), [B.id, A.id]);
 
-  const flipBack = await flipAndWait(browser, B.id);
-  checks.equals("Alt+N from selected link -> B", flipBack.after, B.id);
+  const flip = await flipAndWait(browser, A.id);
+  checks.equals("Alt+N after background link open -> A", flip.after, A.id);
+
+  const foreground = await createTab(browser, {
+    windowId,
+    openerTabId: B.id,
+    active: true,
+  });
+  await sleep(1000);
+  const activeAfterForeground = await getActiveTab(browser);
+  checks.equals("foreground link tab stays active", activeAfterForeground?.id, foreground.id);
+  checks.equals(
+    "foreground link becomes MRU head",
+    mruIds(await getMruForWindow(browser, windowId), 1),
+    [foreground.id],
+  );
+
+  await closeTab(browser, foreground.id);
+  const afterForegroundClose = await waitForActiveTab(browser, A.id, 6000);
+  checks.equals("closing foreground link -> previous tab A", afterForegroundClose?.id, A.id);
 
   await activateTab(browser, link.id);
-  await sleep(500);
+  await sleep(600);
+  checks.equals(
+    "visited background link becomes MRU head",
+    mruIds(await getMruForWindow(browser, windowId), 1),
+    [link.id],
+  );
+
   await closeTab(browser, link.id);
-  const afterClose = await waitForActiveTab(browser, B.id, 6000);
-  checks.equals("closing selected link -> previous tab B", afterClose?.id, B.id);
+  const afterLinkClose = await waitForActiveTab(browser, A.id, 6000);
+  checks.equals("closing visited link -> previous tab A", afterLinkClose?.id, A.id);
 }
 
 export const scenarios = {
@@ -801,6 +897,7 @@ export const scenarios = {
   "background-link-ntsel1": backgroundLinkNtsel1,
   "html-links-foreground": htmlLinksForeground,
   "html-links-background": htmlLinksBackground,
+  "html-links-background-ntsel1": htmlLinksBackgroundNtsel1,
   "multi-window-mru": multiWindowMru,
   "multi-link-windows": multiLinkWindows,
 };
