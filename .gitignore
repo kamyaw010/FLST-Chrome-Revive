@@ -95,6 +95,9 @@ temp/
 # Local test sandbox (Chrome for Testing, profiles, logs)
 .sandbox/
 
+# Local release notes (kept out of the repository)
+CHROME_RELEASE_*.md
+
 # Editor directories and files
 .vscode/
 .idea/
