@@ -1,6 +1,6 @@
 {
   "name": "flst-chrome-revive",
-  "version": "3.4.4",
+  "version": "3.4.5",
   "description": "FLST Chrome Revive :: Focus Last Selected Tab - Provides natural / MRU tab ordering + Options for Tab Flipping, New Tab Select, and New Tab Location",
   "scripts": {
     "build": "tsc",
