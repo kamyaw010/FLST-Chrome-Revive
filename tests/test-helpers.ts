@@ -46,10 +46,14 @@ export function createFreshWindowManager(): WindowManager {
  * Create a mock WindowManager-like object for TabManager tests.
  * This avoids needing the real WindowManager and its Chrome API dependencies.
  */
-export function createMockWindowManager(trackers: TabTracker[]) {
+export function createMockWindowManager(trackers: TabTracker[], initialTabIds: number[] = []) {
+  const initialSet = new Set(initialTabIds);
   return {
     getWindowTracker(windowId: number): TabTracker | null {
       return trackers.find((t) => t.wid === windowId) ?? null;
+    },
+    isInitialTab(tabId: number): boolean {
+      return initialSet.has(tabId);
     },
     findTab(tabId: number): TabInfo {
       for (const tracker of trackers) {

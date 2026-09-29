@@ -5,6 +5,20 @@ import { SkipActivationReason } from "../../types.js";
 import { addTabToMRU, getLeastRecentOrder } from "./mru-utils.js";
 import type { TabManagerRuntime } from "./runtime.js";
 
+// During browser startup, session-restored tabs must keep their saved order.
+// Chrome may deliver tabs.onCreated for restored tabs while the browser is
+// restoring, so relocation is suppressed for a short window after startup.
+const STARTUP_RELOCATION_SUPPRESS_MS = 15000;
+let browserStartupAt = 0;
+
+export function markBrowserStartup(at: number = Date.now()): void {
+  browserStartupAt = at;
+}
+
+function inStartupSuppressionWindow(): boolean {
+  return browserStartupAt !== 0 && Date.now() - browserStartupAt < STARTUP_RELOCATION_SUPPRESS_MS;
+}
+
 async function relocateAfterOpener(
   runtime: TabManagerRuntime,
   tabObj: any,
@@ -126,6 +140,12 @@ export async function handleNewTabEvent(
   let relocatedBeforeQueue = false;
   const getManagedInfo = () => (tabObj.id ? runtime.managedNewTabs.get(tabObj.id) : undefined);
 
+  // Tabs that already existed when this service worker session initialized are
+  // session-restored (or otherwise pre-existing) tabs. They must keep their
+  // position and must never be focused by the new-tab logic.
+  const restoredTab = tabObj.id ? windowManager.isInitialTab?.(tabObj.id) === true : false;
+  const suppressRelocation = restoredTab || inStartupSuppressionWindow();
+
   // Track immediately so close-animation suppression works even if the tab is
   // closed before the queueOperation runs (race condition fix).
   if (tabObj.id && settings.ntsel) {
@@ -135,7 +155,7 @@ export async function handleNewTabEvent(
     });
   }
 
-  if (tabObj.id && initialTracker?.moveok) {
+  if (tabObj.id && initialTracker?.moveok && !suppressRelocation) {
     const initialExistingIndex = initialTracker.tabarr.findIndex(
       (entry: any) => entry.tabId === tabObj.id,
     );
@@ -190,6 +210,7 @@ export async function handleNewTabEvent(
       tabObj.id &&
       tracker.moveok &&
       !relocatedBeforeQueue &&
+      !suppressRelocation &&
       !managedInfo?.suppressRelocation
     ) {
       if (settings.ntord && tabObj.openerTabId) {
@@ -209,7 +230,7 @@ export async function handleNewTabEvent(
         const isBackgroundCreated = tabObj.active === false;
         const isLinkOpened = Boolean(tabObj.openerTabId);
 
-        if (settings.ntsel && !isBackgroundCreated && !isLinkOpened) {
+        if (settings.ntsel && !isBackgroundCreated && !isLinkOpened && !restoredTab) {
           // recentSelectedNewTabs was already written at function entry (before
           // queueOperation) to avoid a race with fast close. No need to repeat.
           if (!managedInfo?.suppressActivation) {
@@ -226,7 +247,7 @@ export async function handleNewTabEvent(
           logger.debug(
             `${logPrefix}[chrome standard - don't select${
               isBackgroundCreated || isLinkOpened ? " (background/link-opened)" : ""
-            }]`,
+            }${restoredTab ? " (restored)" : ""}]`,
           );
         }
       } else {

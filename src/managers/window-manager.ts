@@ -8,6 +8,7 @@ import type { TabTracker, TabInfo, TabMRUEntry } from "../types.js";
 export class WindowManager {
   private static instance: WindowManager;
   private trackers: TabTracker[] = [];
+  private initialTabIds: Set<number> = new Set();
 
   private constructor() {}
 
@@ -58,6 +59,13 @@ export class WindowManager {
 
           // Always save current state after initialization
           await storageManager.saveTrackingState(this.trackers, true);
+
+          // Snapshot the tab IDs that already existed when this service worker
+          // session started. Tabs in this set are restored/leftover tabs, not
+          // newly created ones, so they must never be relocated.
+          this.initialTabIds = new Set(
+            this.trackers.flatMap((tracker) => tracker.tabarr.map((entry) => entry.tabId)),
+          );
 
           logger.debug(`Window tracking initialized: ${this.trackers.length} windows`);
           resolve();
@@ -257,6 +265,14 @@ export class WindowManager {
    */
   public getAllTrackers(): TabTracker[] {
     return this.trackers;
+  }
+
+  /**
+   * Whether the tab already existed when the current service worker session
+   * initialized. Used to keep session-restored tabs from being relocated.
+   */
+  public isInitialTab(tabId: number): boolean {
+    return this.initialTabIds.has(tabId);
   }
 
   /**

@@ -1,5 +1,5 @@
 //
-// FLST Chrome <<>> Focus Last Selected Tab <<>> Rev 3.4.4
+// FLST Chrome <<>> Focus Last Selected Tab <<>> Rev 3.4.5
 //
 // FLST provides natural / MRU tab ordering, plus Options for
 // Tab-Flipping, New-Tab-Select, and New-Tab-Location.
@@ -16,6 +16,7 @@ import { tabManager } from "./managers/tab-manager.js";
 import { settingsManager } from "./managers/settings-manager.js";
 import { serviceWorkerManager } from "./managers/service-worker-manager.js";
 import { storageManager } from "./managers/storage-manager.js";
+import { markBrowserStartup } from "./managers/tab-operations/new-tab-handler.js";
 
 // =====================================================================
 // Initialization promise - ensures init completes before event handling
@@ -188,6 +189,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // --- Service worker lifecycle ---
 chrome.runtime.onStartup.addListener(() => {
   logger.debug("Service worker started (onStartup)");
+  markBrowserStartup();
   ensureInitialized().then(() => serviceWorkerManager.handleReactivation());
 });
 

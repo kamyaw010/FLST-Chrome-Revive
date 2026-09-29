@@ -640,6 +640,121 @@ export async function htmlLinksBackgroundNtsel1(ctx) {
   }
 }
 
+export async function restartOrder(ctx) {
+  const { checks, log } = ctx;
+  let browser = ctx.browser;
+
+  const popup = await prepare(ctx, { flip: 1, ntsel: 1, reloc: 1, ntord: 0, log: true });
+  await closePopup(ctx, popup);
+
+  const windowId = await mainWindowId(ctx);
+  const tabs = [];
+  for (const name of ["a", "b", "c", "d"]) {
+    tabs.push(await createTab(browser, { windowId, url: `about:blank#${name}` }));
+  }
+  await sleep(1200);
+  for (const tab of tabs) {
+    await activateTab(browser, tab.id);
+    await sleep(300);
+  }
+  await sleep(800);
+
+  const beforeTabs = (await getTabs(browser)).sort((x, y) => x.index - y.index);
+  const beforeOrder = beforeTabs
+    .map((tab) => (tab.url ?? "").split("#")[1] ?? tab.url)
+    .filter((name) => ["a", "b", "c", "d"].includes(name));
+  log(`strip order before restart: ${beforeOrder.join(",")}`);
+  checks.equals("pre-restart strip order is a,b,c,d", beforeOrder, ["a", "b", "c", "d"]);
+
+  await closeSandbox(browser);
+  const restarted = await launchSandbox({
+    userDataDir: ctx.profileDir,
+    extraArgs: ["--restore-last-session"],
+  });
+  ctx.browser = restarted;
+  ctx.collector.setBrowser(restarted);
+  browser = restarted;
+
+  await getExtensionId(browser);
+  await waitForInit(browser, 30000);
+  await sleep(3000);
+
+  const afterTabs = (await getTabs(browser)).sort((x, y) => x.index - y.index);
+  const afterOrder = afterTabs.map((tab) => (tab.url ?? "").split("#")[1] ?? tab.url);
+  log(`strip order after restart: ${afterOrder.join(",")}`);
+  const afterFragments = afterOrder.filter((name) => ["a", "b", "c", "d"].includes(name));
+  checks.equals("restored tab order is preserved (a,b,c,d)", afterFragments, ["a", "b", "c", "d"]);
+}
+
+export async function restartOrderPinned(ctx) {
+  const { checks, log } = ctx;
+  let browser = ctx.browser;
+
+  const popup = await prepare(ctx, { flip: 1, ntsel: 1, reloc: 1, ntord: 0, log: true });
+  await closePopup(ctx, popup);
+
+  const windowId = await mainWindowId(ctx);
+  const p1 = await createTab(browser, { windowId, url: "about:blank#p1", active: false });
+  const p2 = await createTab(browser, { windowId, url: "about:blank#p2", active: false });
+  await evalSw(
+    browser,
+    async (ids) => {
+      for (const id of ids) {
+        await chrome.tabs.update(id, { pinned: true });
+      }
+    },
+    [p1.id, p2.id],
+  );
+  await sleep(800);
+
+  const tabs = [];
+  for (const name of ["a", "b", "c", "d"]) {
+    tabs.push(await createTab(browser, { windowId, url: `about:blank#${name}` }));
+  }
+  await sleep(1200);
+  const [A, B, C, D] = tabs;
+  await activateTab(browser, A.id);
+  await sleep(250);
+  await activateTab(browser, C.id);
+  await sleep(250);
+  await activateTab(browser, D.id);
+  await sleep(250);
+  await activateTab(browser, B.id);
+  await sleep(1000);
+
+  const orderOf = (list) =>
+    list
+      .sort((x, y) => x.index - y.index)
+      .map((tab) => (tab.url ?? "").split("#")[1] ?? tab.url);
+  const before = orderOf(await getTabs(browser)).filter((name) =>
+    ["p1", "p2", "a", "b", "c", "d"].includes(name),
+  );
+  log(`strip order before restart: ${before.join(",")}`);
+  checks.equals("pre-restart order is p1,p2,a,b,c,d", before, ["p1", "p2", "a", "b", "c", "d"]);
+
+  await closeSandbox(browser);
+  const restarted = await launchSandbox({
+    userDataDir: ctx.profileDir,
+    extraArgs: ["--restore-last-session"],
+  });
+  ctx.browser = restarted;
+  ctx.collector.setBrowser(restarted);
+  browser = restarted;
+
+  await getExtensionId(browser);
+  await waitForInit(browser, 30000);
+  await sleep(3000);
+
+  const after = orderOf(await getTabs(browser));
+  log(`strip order after restart: ${after.join(",")}`);
+  const fragments = after.filter((name) => ["p1", "p2", "a", "b", "c", "d"].includes(name));
+  checks.equals(
+    "restored order with pinned tabs is preserved (p1,p2,a,b,c,d)",
+    fragments,
+    ["p1", "p2", "a", "b", "c", "d"],
+  );
+}
+
 async function flipInWindow(ctx, windowId) {  const { page } = await openPopupPage(ctx.browser, ctx.extensionId, windowId);
   await triggerPopupFlipAction(page);
 }
@@ -891,6 +1006,8 @@ export const scenarios = {
   "newtab-active-tracking": newtabActiveTracking,
   dormancy,
   restart,
+  "restart-order": restartOrder,
+  "restart-order-pinned": restartOrderPinned,
   "multi-window": multiWindow,
   "multi-link-tabs": multiLinkTabs,
   "background-link-close": backgroundLinkClose,

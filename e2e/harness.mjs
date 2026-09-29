@@ -47,20 +47,24 @@ export function freshProfile(name) {
 
 export async function launchSandbox({
   extensionDir = DEFAULT_EXTENSION,
+  extraExtensionDirs = [],
   userDataDir,
   extraArgs = [],
   headless = false,
 } = {}) {
-  if (!fs.existsSync(path.join(extensionDir, "manifest.json"))) {
-    throw new Error(`Extension manifest not found in ${extensionDir}`);
+  const dirs = [extensionDir, ...extraExtensionDirs];
+  for (const dir of dirs) {
+    if (!fs.existsSync(path.join(dir, "manifest.json"))) {
+      throw new Error(`Extension manifest not found in ${dir}`);
+    }
   }
   if (!fs.existsSync(CHROME_EXE)) {
     throw new Error(`Chrome for Testing not found at ${CHROME_EXE}`);
   }
 
   const args = [
-    `--disable-extensions-except=${extensionDir}`,
-    `--load-extension=${extensionDir}`,
+    `--disable-extensions-except=${dirs.join(",")}`,
+    `--load-extension=${dirs.join(",")}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-search-engine-choice-screen",
@@ -107,7 +111,12 @@ export function getServiceWorkerTarget(browser) {
   return (
     browser
       .targets()
-      .find((t) => t.type() === "service_worker" && t.url().startsWith("chrome-extension://")) ?? null
+      .find(
+        (t) =>
+          t.type() === "service_worker" &&
+          t.url().startsWith("chrome-extension://") &&
+          !t.url().endsWith("/reporter-sw.js"),
+      ) ?? null
   );
 }
 
@@ -119,6 +128,48 @@ export async function getExtensionId(browser, timeout = 20000) {
   const match = /^chrome-extension:\/\/([^/]+)\//.exec(target.url());
   if (!match) throw new Error(`Cannot parse extension id from ${target.url()}`);
   return match[1];
+}
+
+export async function evalInTarget(target, fn, ...args) {
+  const expression = `(${fn.toString()})(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
+  const session = await target.createCDPSession();
+  try {
+    const result = await session.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (result.exceptionDetails) {
+      throw new Error(
+        result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
+      );
+    }
+    return result.result?.value;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+export async function getExtensionTargetByName(browser, name, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const target of browser.targets()) {
+      if (target.type() !== "service_worker" || !target.url().startsWith("chrome-extension://")) {
+        continue;
+      }
+      try {
+        const manifestName = await evalInTarget(
+          target,
+          () => chrome.runtime.getManifest().name,
+        );
+        if (manifestName === name) return target;
+      } catch {
+        /* worker not ready */
+      }
+    }
+    await sleep(300);
+  }
+  throw new Error(`Extension target not found by name: ${name}`);
 }
 
 export async function wakeServiceWorker(browser) {

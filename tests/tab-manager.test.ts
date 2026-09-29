@@ -1623,4 +1623,74 @@ describe("Background Tab MRU Correctness (regression)", () => {
     expect(getMRUSortedTabIds(tracker)[0]).toBe(10);
     expect(getTabUpdateCalls().length).toBe(updateCallsBefore);
   });
+
+  it("should not relocate session-restored tabs (reloc=1)", async () => {
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+    ]);
+    const wm = createMockWindowManager([tracker], [10, 20, 40]);
+    setMockTabs([
+      { id: 10, windowId: 1, index: 0 },
+      { id: 40, windowId: 1, index: 1 },
+      { id: 20, windowId: 1, index: 2 },
+    ]);
+
+    await tabManager.handleNewTab({ id: 40, windowId: 1, active: false }, wm);
+
+    expect(getTabMoveCalls()).toHaveLength(0);
+    expect(getMRUSortedTabIds(tracker)[0]).toBe(20);
+  });
+
+  it("should not relocate session-restored tabs with ntord enabled", async () => {
+    await settingsManager.updateSetting("ntord", 1, "test");
+
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+    ]);
+    const wm = createMockWindowManager([tracker], [10, 20, 40]);
+    setMockTabs([
+      { id: 10, windowId: 1, index: 0 },
+      { id: 20, windowId: 1, index: 1 },
+      { id: 40, windowId: 1, index: 2 },
+    ]);
+
+    await tabManager.handleNewTab({ id: 40, windowId: 1, openerTabId: 10 }, wm);
+
+    expect(getTabMoveCalls()).toHaveLength(0);
+  });
+
+  it("should not focus session-restored tabs even when the event reports them active", async () => {
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+    ]);
+    const wm = createMockWindowManager([tracker], [10, 20, 40]);
+
+    await tabManager.handleNewTab({ id: 40, windowId: 1, active: true }, wm);
+
+    expect(getTabUpdateCalls()).toHaveLength(0);
+    expect(getMRUSortedTabIds(tracker)[0]).toBe(20);
+  });
+
+  it("should suppress relocation during the browser startup window", async () => {
+    const { markBrowserStartup } = await import(
+      "../src/managers/tab-operations/new-tab-handler"
+    );
+
+    const tracker = createTracker(1, [
+      { id: 10, order: 1000 },
+      { id: 20, order: 2000 },
+    ]);
+    const wm = createMockWindowManager([tracker]);
+
+    markBrowserStartup();
+    try {
+      await tabManager.handleNewTab({ id: 40, windowId: 1, active: false }, wm);
+      expect(getTabMoveCalls()).toHaveLength(0);
+    } finally {
+      markBrowserStartup(0);
+    }
+  });
 });
